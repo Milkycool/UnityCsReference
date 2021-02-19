@@ -76,12 +76,14 @@ namespace UnityEditor.Connect
         const string k_JsonNodeNameLabel = "label";
         const string k_JsonNodeNameName = "name";
         const string k_JsonNodeNameBuildTargetId = "buildtargetid";
+        const string k_JsonNodeNameBuildTargetName = "buildtargetname";
         const string k_JsonNodeNameEnabled = "enabled";
         const string k_JsonNodeNameStartBuilds = "start_builds";
         const string k_JsonNodeNameText = "text";
         const string k_JsonNodeNameBillingPlan = "billingPlan";
         const string k_JsonNodeNameAlertType = "alertType";
         const string k_JsonNodeNameBuild = "build";
+        const string k_JsonNodeNameError = "error";
 
         const string k_UrlSuffixBillingPlan = "/billingplan";
 
@@ -97,6 +99,7 @@ namespace UnityEditor.Connect
 
         const string k_MessageLaunchingBuild = "Starting build {0}.";
         const string k_MessageLaunchedBuildSuccess = "Build #{0} {1} added to queue";
+        const string k_MessageLaunchedBuildFailedWithMsg = "Build {0} wasn't launched: {1}";
         const string k_MessageLaunchedBuildFailure = "Unable to build project";
 
         const string k_BuildButtonNamePrefix = "BuildBtn_";
@@ -155,13 +158,8 @@ namespace UnityEditor.Connect
         void SetupServiceToggle(SingleService singleService)
         {
             m_MainServiceToggle.SetProperty(k_ServiceNameProperty, singleService.name);
-            m_MainServiceToggle.SetValueWithoutNotify(singleService.IsServiceEnabled());
-            SetupServiceToggleLabel(m_MainServiceToggle, singleService.IsServiceEnabled());
             m_MainServiceToggle.SetEnabled(false);
-            if (m_GoToDashboard != null)
-            {
-                m_GoToDashboard.style.display = (singleService.IsServiceEnabled()) ? DisplayStyle.Flex : DisplayStyle.None;
-            }
+            UpdateServiceToggleAndDashboardLink(singleService.IsServiceEnabled());
 
             if (singleService.displayToggle)
             {
@@ -169,21 +167,29 @@ namespace UnityEditor.Connect
                 {
                     if (currentUserPermission != UserRole.Owner && currentUserPermission != UserRole.Manager)
                     {
-                        SetupServiceToggleLabel(m_MainServiceToggle, evt.previousValue);
-                        m_MainServiceToggle.SetValueWithoutNotify(evt.previousValue);
+                        UpdateServiceToggleAndDashboardLink(evt.previousValue);
                         return;
                     }
-                    SetupServiceToggleLabel(m_MainServiceToggle, evt.newValue);
                     singleService.EnableService(evt.newValue);
-                    if (m_GoToDashboard != null)
-                    {
-                        m_GoToDashboard.style.display = (evt.newValue) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
                 });
             }
             else
             {
                 m_MainServiceToggle.style.display = DisplayStyle.None;
+            }
+        }
+
+        void UpdateServiceToggleAndDashboardLink(bool isEnabled)
+        {
+            if (m_GoToDashboard != null)
+            {
+                m_GoToDashboard.style.display = (isEnabled) ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            if (m_MainServiceToggle != null)
+            {
+                m_MainServiceToggle.SetValueWithoutNotify(isEnabled);
+                SetupServiceToggleLabel(m_MainServiceToggle, isEnabled);
             }
         }
 
@@ -244,7 +250,7 @@ namespace UnityEditor.Connect
             {
                 var clickable = new Clickable(() =>
                 {
-                    OpenDashboardOrgAndProjectIds(ServicesConfiguration.instance.baseCloudBuildDashboardUrl);
+                    ServicesConfiguration.instance.RequestBaseCloudBuildDashboardUrl(OpenDashboardOrgAndProjectIds);
                 });
                 m_GoToDashboard.AddManipulator(clickable);
             }
@@ -359,7 +365,7 @@ namespace UnityEditor.Connect
 
             public override void EnterState()
             {
-                CloudBuildPoller.instance.Disable();
+                CloudBuildPoller.instance.Disable(true);
                 var generalTemplate = EditorGUIUtility.Load(k_CloudBuildDisabledUxmlPath) as VisualTreeAsset;
                 var scrollContainer = m_Provider.rootVisualElement.Q(className: k_ServiceScrollContainerClassName);
                 scrollContainer.Clear();
@@ -368,6 +374,7 @@ namespace UnityEditor.Connect
                     var disabledStateContent = generalTemplate.CloneTree().contentContainer;
                     ServicesUtils.TranslateStringsInTree(disabledStateContent);
                     scrollContainer.Add(disabledStateContent);
+                    m_Provider.UpdateServiceToggleAndDashboardLink(m_Provider.serviceInstance.IsServiceEnabled());
                 }
 
                 var startUsing = m_Provider.rootVisualElement.Q(k_StartUsingCloudBuildLink);
@@ -424,7 +431,10 @@ namespace UnityEditor.Connect
                 {
                     historyButton.clicked += () =>
                     {
-                        Application.OpenURL(ServicesConfiguration.instance.GetCurrentCloudBuildProjectHistoryUrl());
+                        ServicesConfiguration.instance.RequestCurrentCloudBuildProjectHistoryUrl(currentCloudBuildProjectHistoryUrl =>
+                        {
+                            Application.OpenURL(currentCloudBuildProjectHistoryUrl);
+                        });
                     };
                 }
 
@@ -433,7 +443,10 @@ namespace UnityEditor.Connect
                 {
                     uploadButton.clicked += () =>
                     {
-                        Application.OpenURL(ServicesConfiguration.instance.GetCurrentCloudBuildProjectUploadUrl());
+                        ServicesConfiguration.instance.RequestCurrentCloudBuildProjectUploadUrl(currentCloudBuildProjectUploadUrl =>
+                        {
+                            Application.OpenURL(currentCloudBuildProjectUploadUrl);
+                        });
                     };
                 }
 
@@ -442,7 +455,10 @@ namespace UnityEditor.Connect
                 {
                     manageTargetButton.clicked += () =>
                     {
-                        Application.OpenURL(ServicesConfiguration.instance.GetCurrentCloudBuildProjectTargetUrl());
+                        ServicesConfiguration.instance.RequestCurrentCloudBuildProjectTargetUrl(currentCloudBuildProjectTargetUrl =>
+                        {
+                            Application.OpenURL(currentCloudBuildProjectTargetUrl);
+                        });
                     };
                     manageTargetButton.style.display = DisplayStyle.None;
                 }
@@ -451,9 +467,13 @@ namespace UnityEditor.Connect
                 {
                     addTargetButton.clicked += () =>
                     {
-                        Application.OpenURL(ServicesConfiguration.instance.GetCloudBuildAddTargetUrl());
+                        ServicesConfiguration.instance.RequestCloudBuildAddTargetUrl(cloudBuildAddTargetUrl =>
+                        {
+                            Application.OpenURL(cloudBuildAddTargetUrl);
+                        });
                     };
                 }
+                m_Provider.UpdateServiceToggleAndDashboardLink(m_Provider.serviceInstance.IsServiceEnabled());
 
                 ResetData();
                 GetProjectInfo();
@@ -471,18 +491,22 @@ namespace UnityEditor.Connect
 
             void GetProjectInfo()
             {
-                var getCurrentProjectRequest = new UnityWebRequest(ServicesConfiguration.instance.GetCloudBuildApiCurrentProjectUrl(),
-                    UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
-                getCurrentProjectRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
-                if (m_Provider.m_GetProjectRequest != null)
+                ServicesConfiguration.instance.RequestCloudBuildApiCurrentProjectUrl(cloudBuildApiCurrentProjectUrl =>
                 {
-                    m_Provider.m_GetProjectRequest.Abort();
-                    m_Provider.m_GetProjectRequest.Dispose();
-                    m_Provider.m_GetProjectRequest = null;
-                }
-                m_Provider.m_GetProjectRequest = getCurrentProjectRequest;
-                var operation = getCurrentProjectRequest.SendWebRequest();
-                operation.completed += GetProjectInfoRequestOnCompleted;
+                    var getCurrentProjectRequest = new UnityWebRequest(cloudBuildApiCurrentProjectUrl,
+                        UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
+                    getCurrentProjectRequest.suppressErrorsToConsole = true;
+                    getCurrentProjectRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
+                    if (m_Provider.m_GetProjectRequest != null)
+                    {
+                        m_Provider.m_GetProjectRequest.Abort();
+                        m_Provider.m_GetProjectRequest.Dispose();
+                        m_Provider.m_GetProjectRequest = null;
+                    }
+                    m_Provider.m_GetProjectRequest = getCurrentProjectRequest;
+                    var operation = getCurrentProjectRequest.SendWebRequest();
+                    operation.completed += GetProjectInfoRequestOnCompleted;
+                });
             }
 
             void GetProjectInfoRequestOnCompleted(AsyncOperation obj)
@@ -511,13 +535,16 @@ namespace UnityEditor.Connect
                             else
                             {
                                 var linksDict = json.AsDict()[k_JsonNodeNameLinks].AsDict();
-                                m_CloudBuildApiOrgProjectUrl = ServicesConfiguration.instance.GetCloudBuildApiUrl() + linksDict[k_JsonNodeNameSelf].AsDict()[k_JsonNodeNameHref].AsString();
-                                m_CloudBuildApiOrgProjectBillingPlanUrl = m_CloudBuildApiOrgProjectUrl + k_UrlSuffixBillingPlan;
-                                m_CloudBuildApiOrgProjectBuildTargetsUrl = ServicesConfiguration.instance.GetCloudBuildApiUrl() + linksDict[k_JsonNodeNameListBuildTargets].AsDict()[k_JsonNodeNameHref].AsString();
-                                m_CloudBuildApiOrgLatestBuilds = ServicesConfiguration.instance.GetCloudBuildApiUrl() + linksDict[k_JsonNodeNameLatestBuilds].AsDict()[k_JsonNodeNameHref].AsString();
-                                m_CloudBuildApiOrgLatestBuilds = m_CloudBuildApiOrgLatestBuilds.Remove(m_CloudBuildApiOrgLatestBuilds.Length - 1, 1) + k_NumberOfBuildsToQuery;
+                                ServicesConfiguration.instance.RequestCloudBuildApiUrl(cloudBuildApiUrl =>
+                                {
+                                    m_CloudBuildApiOrgProjectUrl = cloudBuildApiUrl + linksDict[k_JsonNodeNameSelf].AsDict()[k_JsonNodeNameHref].AsString();
+                                    m_CloudBuildApiOrgProjectBillingPlanUrl = m_CloudBuildApiOrgProjectUrl + k_UrlSuffixBillingPlan;
+                                    m_CloudBuildApiOrgProjectBuildTargetsUrl = cloudBuildApiUrl + linksDict[k_JsonNodeNameListBuildTargets].AsDict()[k_JsonNodeNameHref].AsString();
+                                    m_CloudBuildApiOrgLatestBuilds = cloudBuildApiUrl + linksDict[k_JsonNodeNameLatestBuilds].AsDict()[k_JsonNodeNameHref].AsString();
+                                    m_CloudBuildApiOrgLatestBuilds = m_CloudBuildApiOrgLatestBuilds.Remove(m_CloudBuildApiOrgLatestBuilds.Length - 1, 1) + k_NumberOfBuildsToQuery;
 
-                                GetProjectBillingPlan();
+                                    GetProjectBillingPlan();
+                                });
                             }
                         }
                         catch (Exception ex)
@@ -541,6 +568,7 @@ namespace UnityEditor.Connect
             {
                 var getCurrentProjectBillingPlanRequest = new UnityWebRequest(m_CloudBuildApiOrgProjectBillingPlanUrl,
                     UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
+                getCurrentProjectBillingPlanRequest.suppressErrorsToConsole = true;
                 getCurrentProjectBillingPlanRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
                 if (m_Provider.m_GetProjectBillingPlanRequest != null)
                 {
@@ -594,6 +622,7 @@ namespace UnityEditor.Connect
             {
                 var getCurrentProjectBuildTargetsRequest = new UnityWebRequest(m_CloudBuildApiOrgProjectBuildTargetsUrl,
                     UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
+                getCurrentProjectBuildTargetsRequest.suppressErrorsToConsole = true;
                 getCurrentProjectBuildTargetsRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
                 if (m_Provider.m_GetProjectBuildTargetsRequest != null)
                 {
@@ -636,7 +665,11 @@ namespace UnityEditor.Connect
                                 m_Provider.rootVisualElement.Q(k_PollFooterSectionName).style.display = DisplayStyle.Flex;
 
                                 var pollerToggle = m_Provider.rootVisualElement.Q<Toggle>(k_PollToggleName);
-                                pollerToggle.SetValueWithoutNotify(true);
+                                if (!CloudBuildPoller.instance.enabledOnce)
+                                {
+                                    CloudBuildPoller.instance.Enable(m_CloudBuildApiOrgLatestBuilds);
+                                }
+                                pollerToggle.SetValueWithoutNotify(CloudBuildPoller.instance.enabled);
                                 pollerToggle.RegisterValueChangedCallback(evt =>
                                 {
                                     if (evt.newValue)
@@ -656,8 +689,6 @@ namespace UnityEditor.Connect
                                     var buildEntry = jsonBuildEntry.AsDict();
                                     AddBuildTarget(targetsContainer, buildEntry);
                                 }
-
-                                CloudBuildPoller.instance.Enable(m_CloudBuildApiOrgLatestBuilds);
                             }
                             m_Provider.rootVisualElement.Q(className: k_ServiceCloudBuildContainerClassName).style.display = DisplayStyle.Flex;
                             m_Provider.rootVisualElement.Q(className: k_ServiceCloudProgressClassName).style.display = DisplayStyle.None;
@@ -683,122 +714,142 @@ namespace UnityEditor.Connect
             {
                 if (buildEntry[k_JsonNodeNameEnabled].AsBool())
                 {
-                    var buildTargetName = buildEntry[k_JsonNodeNameName].AsString();
-                    var buildTargetId = buildEntry[k_JsonNodeNameBuildTargetId].AsString();
-                    var buildTargetUrls = buildEntry[k_JsonNodeNameLinks].AsDict();
-                    var startBuildUrl = ServicesConfiguration.instance.GetCloudBuildApiUrl() + buildTargetUrls[k_JsonNodeNameStartBuilds].AsDict()[k_JsonNodeNameHref].AsString();
-
-                    var targetContainer = new VisualElement();
-                    targetContainer.AddToClassList(k_ClassNameTargetEntry);
-                    var buildNameTextElement = new TextElement();
-                    buildNameTextElement.AddToClassList(k_ClassNameTitle);
-                    buildNameTextElement.text = buildTargetName;
-                    targetContainer.Add(buildNameTextElement);
-                    var buildButton = new Button();
-                    buildButton.name = k_BuildButtonNamePrefix + buildTargetId;
-                    buildButton.AddToClassList(k_ClassNameBuildButton);
-                    if (m_BillingPlanLabel.ToLower() == k_SubscriptionPersonal
-                        || k_SubscriptionTeamsBasic.ToLower() == k_SubscriptionPersonal)
+                    ServicesConfiguration.instance.RequestCloudBuildApiUrl(cloudBuildApiUrl =>
                     {
-                        buildButton.SetEnabled(false);
-                    }
-                    buildButton.text = L10n.Tr(k_LabelBuildButton);
-                    buildButton.clicked += () =>
-                    {
-                        var uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(k_LaunchBuildPayload));
-                        var launchBuildPostRequest = new UnityWebRequest(startBuildUrl,
-                            UnityWebRequest.kHttpVerbPOST) { downloadHandler = new DownloadHandlerBuffer(), uploadHandler = uploadHandler };
-                        launchBuildPostRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
-                        launchBuildPostRequest.SetRequestHeader("Content-Type", "application/json;charset=utf-8");
-                        m_Provider.m_BuildRequests.Add(launchBuildPostRequest);
-                        var launchingMessage = string.Format(L10n.Tr(k_MessageLaunchingBuild), buildTargetName);
+                        var buildTargetName = buildEntry[k_JsonNodeNameName].AsString();
+                        var buildTargetId = buildEntry[k_JsonNodeNameBuildTargetId].AsString();
+                        var buildTargetUrls = buildEntry[k_JsonNodeNameLinks].AsDict();
+                        var startBuildUrl = cloudBuildApiUrl + buildTargetUrls[k_JsonNodeNameStartBuilds].AsDict()[k_JsonNodeNameHref].AsString();
 
-                        Debug.Log(launchingMessage);
-                        NotificationManager.instance.Publish(
-                            Notification.Topic.BuildService,
-                            Notification.Severity.Info,
-                            launchingMessage);
-
-                        EditorAnalytics.SendLaunchCloudBuildEvent(new BuildPostInfo() { targetName = buildTargetName });
-
-                        var operation = launchBuildPostRequest.SendWebRequest();
-                        operation.completed += asyncOperation =>
+                        var targetContainer = new VisualElement();
+                        targetContainer.AddToClassList(k_ClassNameTargetEntry);
+                        var buildNameTextElement = new TextElement();
+                        buildNameTextElement.AddToClassList(k_ClassNameTitle);
+                        buildNameTextElement.text = buildTargetName;
+                        targetContainer.Add(buildNameTextElement);
+                        var buildButton = new Button();
+                        buildButton.name = k_BuildButtonNamePrefix + buildTargetId;
+                        buildButton.AddToClassList(k_ClassNameBuildButton);
+                        if (m_BillingPlanLabel.ToLower() == k_SubscriptionPersonal
+                            || k_SubscriptionTeamsBasic.ToLower() == k_SubscriptionPersonal)
                         {
-                            try
-                            {
-                                if (ServicesUtils.IsUnityWebRequestReadyForJsonExtract(launchBuildPostRequest))
-                                {
-                                    try
-                                    {
-                                        if (launchBuildPostRequest.responseCode == k_HttpResponseCodeAccepted)
-                                        {
-                                            var jsonLaunchedBuildParser = new JSONParser(launchBuildPostRequest.downloadHandler.text);
-                                            var launchedBuildJson = jsonLaunchedBuildParser.Parse();
-                                            var launchedBuilds = launchedBuildJson.AsList();
+                            buildButton.SetEnabled(false);
+                        }
+                        buildButton.text = L10n.Tr(k_LabelBuildButton);
+                        buildButton.clicked += () =>
+                        {
+                            var uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(k_LaunchBuildPayload));
+                            var launchBuildPostRequest = new UnityWebRequest(startBuildUrl,
+                                UnityWebRequest.kHttpVerbPOST) { downloadHandler = new DownloadHandlerBuffer(), uploadHandler = uploadHandler };
+                            launchBuildPostRequest.suppressErrorsToConsole = true;
+                            launchBuildPostRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
+                            launchBuildPostRequest.SetRequestHeader("Content-Type", "application/json;charset=utf-8");
+                            m_Provider.m_BuildRequests.Add(launchBuildPostRequest);
+                            var launchingMessage = string.Format(L10n.Tr(k_MessageLaunchingBuild), buildTargetName);
 
-                                            foreach (var rawLaunchedBuild in launchedBuilds)
+                            Debug.Log(launchingMessage);
+                            NotificationManager.instance.Publish(
+                                Notification.Topic.BuildService,
+                                Notification.Severity.Info,
+                                launchingMessage);
+
+                            EditorAnalytics.SendLaunchCloudBuildEvent(new BuildPostInfo() { targetName = buildTargetName });
+
+                            var operation = launchBuildPostRequest.SendWebRequest();
+                            operation.completed += asyncOperation =>
+                            {
+                                try
+                                {
+                                    if (ServicesUtils.IsUnityWebRequestReadyForJsonExtract(launchBuildPostRequest))
+                                    {
+                                        try
+                                        {
+                                            if (launchBuildPostRequest.responseCode == k_HttpResponseCodeAccepted)
                                             {
-                                                var launchedBuild = rawLaunchedBuild.AsDict();
-                                                var buildNumber = launchedBuild[k_JsonNodeNameBuild].AsFloat().ToString();
-                                                var message = string.Format(L10n.Tr(k_MessageLaunchedBuildSuccess), buildNumber, buildTargetName);
-                                                Debug.Log(message);
+                                                var jsonLaunchedBuildParser = new JSONParser(launchBuildPostRequest.downloadHandler.text);
+                                                var launchedBuildJson = jsonLaunchedBuildParser.Parse();
+                                                var launchedBuilds = launchedBuildJson.AsList();
+
+                                                foreach (var rawLaunchedBuild in launchedBuilds)
+                                                {
+                                                    var launchedBuild = rawLaunchedBuild.AsDict();
+                                                    if (launchedBuild.ContainsKey(k_JsonNodeNameBuild))
+                                                    {
+                                                        var buildNumber = launchedBuild[k_JsonNodeNameBuild].AsFloat().ToString();
+                                                        var message = string.Format(L10n.Tr(k_MessageLaunchedBuildSuccess), buildNumber, buildTargetName);
+                                                        Debug.Log(message);
+                                                        NotificationManager.instance.Publish(
+                                                            Notification.Topic.BuildService,
+                                                            Notification.Severity.Info,
+                                                            message);
+                                                    }
+                                                    else if (launchedBuild.ContainsKey(k_JsonNodeNameError))
+                                                    {
+                                                        var message = string.Format(L10n.Tr(k_MessageLaunchedBuildFailedWithMsg), buildTargetName, launchedBuild[k_JsonNodeNameError].ToString());
+                                                        Debug.LogError(message);
+                                                        NotificationManager.instance.Publish(
+                                                            Notification.Topic.BuildService,
+                                                            Notification.Severity.Error,
+                                                            message);
+                                                    }
+                                                }
+                                            }
+                                            else
+                                            {
+                                                var message = L10n.Tr(k_MessageLaunchedBuildFailure);
+                                                Debug.LogError(message);
                                                 NotificationManager.instance.Publish(
                                                     Notification.Topic.BuildService,
-                                                    Notification.Severity.Info,
+                                                    Notification.Severity.Error,
                                                     message);
                                             }
                                         }
-                                        else
+                                        catch (Exception ex)
                                         {
-                                            var message = L10n.Tr(k_MessageLaunchedBuildFailure);
-                                            Debug.LogError(message);
                                             NotificationManager.instance.Publish(
                                                 Notification.Topic.BuildService,
                                                 Notification.Severity.Error,
-                                                message);
+                                                L10n.Tr(k_MessageErrorForBuildLaunch));
+                                            Debug.LogException(ex);
                                         }
                                     }
-                                    catch (Exception ex)
-                                    {
-                                        NotificationManager.instance.Publish(
-                                            Notification.Topic.BuildService,
-                                            Notification.Severity.Error,
-                                            L10n.Tr(k_MessageErrorForBuildLaunch));
-                                        Debug.LogException(ex);
-                                    }
                                 }
-                            }
-                            finally
-                            {
-                                m_Provider.m_BuildRequests.Remove(launchBuildPostRequest);
-                                launchBuildPostRequest.Dispose();
-                                launchBuildPostRequest = null;
-                            }
+                                finally
+                                {
+                                    m_Provider.m_BuildRequests.Remove(launchBuildPostRequest);
+                                    launchBuildPostRequest.Dispose();
+                                    launchBuildPostRequest = null;
+                                }
+                            };
                         };
-                    };
-                    targetContainer.Add(buildButton);
-                    targetsContainer.Add(targetContainer);
+                        targetContainer.Add(buildButton);
+                        targetsContainer.Add(targetContainer);
 
-                    var separator = new VisualElement();
-                    separator.AddToClassList(k_ClassNameSeparator);
-                    targetsContainer.Add(separator);
+                        var separator = new VisualElement();
+                        separator.AddToClassList(k_ClassNameSeparator);
+                        targetsContainer.Add(separator);
+                    });
                 }
             }
 
             void GetApiStatus()
             {
-                var getCurrentProjectStatusRequest = new UnityWebRequest(ServicesConfiguration.instance.GetCloudBuildApiStatusUrl(),
-                    UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
-                getCurrentProjectStatusRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
-                if (m_Provider.m_GetApiStatusRequest != null)
+                ServicesConfiguration.instance.RequestCloudBuildApiStatusUrl(cloudBuildApiStatusUrl =>
                 {
-                    m_Provider.m_GetApiStatusRequest.Abort();
-                    m_Provider.m_GetApiStatusRequest.Dispose();
-                    m_Provider.m_GetApiStatusRequest = null;
-                }
-                m_Provider.m_GetApiStatusRequest = getCurrentProjectStatusRequest;
-                var operation = getCurrentProjectStatusRequest.SendWebRequest();
-                operation.completed += GetApiStatusRequestOnCompleted;
+                    var getCurrentProjectStatusRequest = new UnityWebRequest(cloudBuildApiStatusUrl,
+                        UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
+                    getCurrentProjectStatusRequest.suppressErrorsToConsole = true;
+                    getCurrentProjectStatusRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
+                    if (m_Provider.m_GetApiStatusRequest != null)
+                    {
+                        m_Provider.m_GetApiStatusRequest.Abort();
+                        m_Provider.m_GetApiStatusRequest.Dispose();
+                        m_Provider.m_GetApiStatusRequest = null;
+                    }
+                    m_Provider.m_GetApiStatusRequest = getCurrentProjectStatusRequest;
+                    var operation = getCurrentProjectStatusRequest.SendWebRequest();
+                    operation.completed += GetApiStatusRequestOnCompleted;
+                });
             }
 
             void GetApiStatusRequestOnCompleted(AsyncOperation obj)

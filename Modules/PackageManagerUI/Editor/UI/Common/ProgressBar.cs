@@ -12,11 +12,20 @@ namespace UnityEditor.PackageManager.UI
     {
         internal new class UxmlFactory : UxmlFactory<ProgressBar> {}
 
+        private ResourceLoader m_ResourceLoader;
+        private void ResolveDependencies()
+        {
+            var container = ServicesContainer.instance;
+            m_ResourceLoader = container.Resolve<ResourceLoader>();
+        }
+
         public ProgressBar()
         {
-            SetDisplay(false);
+            ResolveDependencies();
 
-            var root = Resources.GetTemplate("ProgressBar.uxml");
+            UIUtils.SetElementDisplay(this, false);
+
+            var root = m_ResourceLoader.GetTemplate("ProgressBar.uxml");
             Add(root);
             root.StretchToParentSize();
 
@@ -26,15 +35,10 @@ namespace UnityEditor.PackageManager.UI
             currentProgressBar.style.width = Length.Percent(0);
         }
 
-        private void SetDisplay(bool value)
-        {
-            UIUtils.SetElementDisplay(this, value);
-        }
-
         public void UpdateProgress(IOperation operation)
         {
-            var showProgressBar = operation != null && operation.isProgressTrackable && operation.isInProgress;
-            SetDisplay(showProgressBar);
+            var showProgressBar = operation != null && operation.isProgressTrackable && operation.isProgressVisible;
+            UIUtils.SetElementDisplay(this, showProgressBar);
             if (showProgressBar)
             {
                 var percentage = Mathf.Clamp01(operation.progressPercentage);

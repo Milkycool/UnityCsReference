@@ -302,6 +302,9 @@ namespace UnityEditorInternal
                 m_SelectedKeysCache = null;
                 m_SelectionBoundsCache = null;
 
+                if (animEditor != null && animEditor.curveEditor != null)
+                    animEditor.curveEditor.InvalidateSelectionBounds();
+
                 ClearCurveWrapperCache();
 
                 if (hierarchyData != null)
@@ -322,6 +325,9 @@ namespace UnityEditorInternal
                 m_ActiveKeyframeCache = null;
                 m_SelectedKeysCache = null;
                 m_SelectionBoundsCache = null;
+
+                if (animEditor != null && animEditor.curveEditor != null)
+                    animEditor.curveEditor.InvalidateSelectionBounds();
 
                 ReloadModifiedAnimationCurveCache();
                 ReloadModifiedDopelineCache();
@@ -347,11 +353,18 @@ namespace UnityEditorInternal
             refresh = RefreshType.Everything;
         }
 
+        private void PurgeSelection()
+        {
+            Object.DestroyImmediate(m_Selection);
+            m_Selection = null;
+        }
+
         public void OnEnable()
         {
             hideFlags = HideFlags.HideAndDontSave;
             AnimationUtility.onCurveWasModified += CurveWasModified;
             Undo.undoRedoPerformed += UndoRedoPerformed;
+            AssemblyReloadEvents.beforeAssemblyReload += PurgeSelection;
 
             // NoOps...
             onStartLiveEdit += () => {};
@@ -367,6 +380,7 @@ namespace UnityEditorInternal
         {
             AnimationUtility.onCurveWasModified -= CurveWasModified;
             Undo.undoRedoPerformed -= UndoRedoPerformed;
+            AssemblyReloadEvents.beforeAssemblyReload -= PurgeSelection;
 
             m_ControlInterface.OnDisable();
         }
@@ -465,6 +479,8 @@ namespace UnityEditorInternal
                 // Otherwise do a full reload
                 refresh = RefreshType.Everything;
             }
+            // Force repaint to display live animation curve changes from other editor window (like timeline).
+            Repaint();
         }
 
         public void SaveKeySelection(string undoLabel)

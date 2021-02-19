@@ -42,6 +42,13 @@ namespace UnityEditor.IMGUI.Controls
         protected DropData m_DropData = new DropData();
         const double k_DropExpandTimeout = 0.7;
 
+        static class Constants
+        {
+            public const string UndoActionName = "Drag";
+            public const string GetInsertionIndexNotFound = "Did not find targetItem,; should be a child of parentItem";
+            public const string UnhandledEnum = "Unhandled enum";
+        }
+
         public TreeViewDragging(TreeViewController treeView)
         {
             m_TreeView = treeView;
@@ -150,7 +157,7 @@ namespace UnityEditor.IMGUI.Controls
         // - Where the dragged items are dropped (above, below or upon)
         // - Auto expansion of collapsed items when hovering over them
         // - Setting up the render markers for drop location (horizontal lines)
-        // 'targetItem' is null when not hovering over any target Item, if so the rest if the arguments are invalid
+        // 'targetItem' is null when not hovering over any target Item, if so the rest of the arguments are invalid
         public virtual bool DragElement(TreeViewItem targetItem, Rect targetItemRect, int row)
         {
             bool perform = Event.current.type == EventType.DragPerform;
@@ -209,7 +216,7 @@ namespace UnityEditor.IMGUI.Controls
                 }
                 break;
                 default:
-                    Assert.IsTrue(false, "Unhandled enum");
+                    Assert.IsTrue(false, Constants.UnhandledEnum);
                     break;
             }
 
@@ -295,6 +302,7 @@ namespace UnityEditor.IMGUI.Controls
                 newSelection[i] = (objs[i].GetInstanceID());
             }
             m_TreeView.NotifyListenersThatDragEnded(newSelection, draggedItemsFromOwnTreeView);
+            Undo.SetCurrentGroupName(Constants.UndoActionName);
         }
 
         protected virtual void HandleAutoExpansion(int itemControlID, TreeViewItem targetItem, Rect targetItemRect)
@@ -386,7 +394,7 @@ namespace UnityEditor.IMGUI.Controls
                 }
                 else
                 {
-                    Debug.LogError("Did not find targetItem,; should be a child of parentItem");
+                    Debug.LogError(Constants.GetInsertionIndexNotFound);
                     insertionIndex = -1;
                 }
             }

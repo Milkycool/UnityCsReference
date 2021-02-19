@@ -596,7 +596,7 @@ namespace UnityEngine
         private LightmapSettings() {}
 
         // Lightmap array.
-        public extern static LightmapData[] lightmaps {[FreeFunction] get; [FreeFunction] set; }
+        public extern static LightmapData[] lightmaps {[FreeFunction] get; [FreeFunction(ThrowsException = true)] set; }
 
         public extern static LightmapsMode lightmapsMode { get; [FreeFunction(ThrowsException = true)] set; }
 
@@ -774,8 +774,10 @@ namespace UnityEngine
         [Obsolete("SetPaperWhiteInNits is deprecated, please use paperWhiteNits instead.")]
         public static void SetPaperWhiteInNits(float paperWhite)
         {
+            int mainDisplay = 0;
             //Set paper white on the primary display
-            SetPaperWhiteNits(0, paperWhite);
+            if (GetAvailable(mainDisplay))
+                SetPaperWhiteNits(mainDisplay, paperWhite);
         }
 
         [FreeFunction("HDROutputSettingsBindings::GetActive", HasExplicitThis = false, ThrowsException = true)]
@@ -831,6 +833,22 @@ namespace UnityEngine.Rendering
         public static extern void EndGPUCapture();
 
         [FreeFunction("PIX::IsAttached")]
+        public static extern bool IsAttached();
+    }
+}
+
+namespace UnityEngine.Experimental.Rendering
+{
+    [NativeHeader("Runtime/Graphics/GraphicsScriptBindings.h")]
+    public static class ExternalGPUProfiler
+    {
+        [FreeFunction("ExternalGPUProfilerBindings::BeginGPUCapture")]
+        public static extern void BeginGPUCapture();
+
+        [FreeFunction("ExternalGPUProfilerBindings::EndGPUCapture")]
+        public static extern void EndGPUCapture();
+
+        [FreeFunction("ExternalGPUProfilerBindings::IsAttached")]
         public static extern bool IsAttached();
     }
 }

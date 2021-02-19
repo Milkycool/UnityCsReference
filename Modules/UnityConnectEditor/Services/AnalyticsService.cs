@@ -4,9 +4,7 @@
 
 using System;
 using System.Text;
-using System.Collections.Generic;
 using UnityEditor.Analytics;
-using UnityEditor.Web;
 using UnityEditorInternal;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -21,9 +19,13 @@ namespace UnityEditor.Connect
         public override string description { get; }
         public override string pathTowardIcon { get; }
         public override string projectSettingsPath { get; }
+        public override string settingsProviderClassName => nameof(AnalyticsProjectSettings);
         public override bool displayToggle { get; }
         public override Notification.Topic notificationTopic => Notification.Topic.AnalyticsService;
-        public override string packageId { get; }
+        public override string packageName { get; }
+        public override string serviceFlagName { get; }
+        public override bool shouldEnableOnProjectCreation => true;
+        public override bool shouldSyncOnProjectRebind => true;
 
         static readonly AnalyticsService k_Instance;
 
@@ -38,14 +40,15 @@ namespace UnityEditor.Connect
 
         AnalyticsService()
         {
-            string serviceName = L10n.Tr("Analytics");
+            const string serviceName = "Analytics";
             name = serviceName;
-            title = serviceName;
+            title = L10n.Tr(serviceName);
             description = L10n.Tr("Discover player insights");
             pathTowardIcon = @"Builtin Skins\Shared\Images\ServicesWindow-ServiceIcon-Analytics.png";
             projectSettingsPath = "Project/Services/Analytics";
             displayToggle = true;
-            packageId = "com.unity.analytics";
+            packageName = "com.unity.analytics";
+            serviceFlagName = "analytics";
             ServicesRepository.AddService(this);
         }
 
@@ -54,7 +57,7 @@ namespace UnityEditor.Connect
             return AnalyticsSettings.enabled;
         }
 
-        protected override void InternalEnableService(bool enable)
+        protected override void InternalEnableService(bool enable, bool shouldUpdateApiFlag)
         {
             if (AnalyticsSettings.enabled != enable)
             {
@@ -62,16 +65,17 @@ namespace UnityEditor.Connect
                 EditorAnalytics.SendEventServiceInfo(new AnalyticsServiceState() { analytics = enable });
                 if (!enable && PurchasingService.instance.IsServiceEnabled())
                 {
-                    PurchasingService.instance.EnableService(false);
+                    PurchasingService.instance.EnableService(false, shouldUpdateApiFlag);
                 }
             }
 
-            base.InternalEnableService(enable);
+            base.InternalEnableService(enable, shouldUpdateApiFlag);
         }
 
         public void RequestValidationData(Action<AsyncOperation> onGet, string authSignature, out UnityWebRequest request)
         {
             request = UnityWebRequest.Get(String.Format(AnalyticsConfiguration.instance.validatorUrl, UnityConnect.instance.projectInfo.projectGUID));
+            request.suppressErrorsToConsole = true;
             var encodedAuthToken = ServicesUtils.Base64Encode((UnityConnect.instance.projectInfo.projectGUID + ":" + authSignature));
             request.SetRequestHeader("Authorization", $"Basic {encodedAuthToken}");
             var operation = request.SendWebRequest();
@@ -82,6 +86,7 @@ namespace UnityEditor.Connect
         public void RequestAuthSignature(Action<AsyncOperation> onGet, out UnityWebRequest request)
         {
             request = UnityWebRequest.Get(String.Format(AnalyticsConfiguration.instance.coreProjectsUrl, UnityConnect.instance.projectInfo.projectGUID));
+            request.suppressErrorsToConsole = true;
             request.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
             var operation = request.SendWebRequest();
             operation.completed += onGet;

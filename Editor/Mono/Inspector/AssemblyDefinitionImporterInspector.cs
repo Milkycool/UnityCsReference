@@ -23,6 +23,7 @@ namespace UnityEditor
         internal class Styles
         {
             public static readonly GUIContent name = EditorGUIUtility.TrTextContent("Name", "The assembly name is used to generate a <name>.dll file on you disk.");
+            public static readonly GUIContent rootNamespace = EditorGUIUtility.TrTextContent("Root Namespace", "Specify the root namespace of the assembly.");
             public static readonly GUIContent defineConstraints = EditorGUIUtility.TrTextContent("Define Constraints", "Specify a constraint in the assembly definition. The assembly definition only builds if this constraint returns True.");
             public static readonly GUIContent versionDefines = EditorGUIUtility.TrTextContent("Version Defines", "Specify which versions of a packages and modules to include in compilations.");
             public static readonly GUIContent references = EditorGUIUtility.TrTextContent("Assembly Definition References", "The list of assembly files that this assembly definition should reference.");
@@ -122,6 +123,7 @@ namespace UnityEditor
             public string path => AssetDatabase.GetAssetPath(asset);
 
             public string assemblyName;
+            public string rootNamespace;
             public AssemblyDefinitionAsset asset;
             public List<AssemblyDefinitionReference> references;
             public List<PrecompiledReference> precompiledReferences;
@@ -144,6 +146,7 @@ namespace UnityEditor
         ReorderableList m_DefineConstraints;
 
         SerializedProperty m_AssemblyName;
+        SerializedProperty m_RootNamespace;
         SerializedProperty m_AllowUnsafeCode;
         SerializedProperty m_UseGUIDs;
         SerializedProperty m_AutoReferenced;
@@ -153,6 +156,7 @@ namespace UnityEditor
         SerializedProperty m_NoEngineReferences;
 
         Exception initializeException;
+        PrecompiledAssemblyProviderBase m_AssemblyProvider;
 
         public override bool showImportedObject => false;
 
@@ -162,6 +166,7 @@ namespace UnityEditor
             m_AssemblyName = extraDataSerializedObject.FindProperty("assemblyName");
             InitializeReorderableLists();
             m_SemVersionRanges = new SemVersionRangesFactory();
+            m_RootNamespace = extraDataSerializedObject.FindProperty("rootNamespace");
             m_AllowUnsafeCode = extraDataSerializedObject.FindProperty("allowUnsafeCode");
             m_UseGUIDs = extraDataSerializedObject.FindProperty("useGUIDs");
             m_AutoReferenced = extraDataSerializedObject.FindProperty("autoReferenced");
@@ -169,6 +174,7 @@ namespace UnityEditor
             m_CompatibleWithAnyPlatform = extraDataSerializedObject.FindProperty("compatibleWithAnyPlatform");
             m_PlatformCompatibility = extraDataSerializedObject.FindProperty("platformCompatibility");
             m_NoEngineReferences = extraDataSerializedObject.FindProperty("noEngineReferences");
+            m_AssemblyProvider = EditorCompilationInterface.Instance.PrecompiledAssemblyProvider;
 
             AssemblyReloadEvents.afterAssemblyReload += AfterAssemblyReload;
         }
@@ -217,8 +223,9 @@ namespace UnityEditor
                 EditorGUILayout.BeginVertical(GUI.skin.box);
                 EditorGUILayout.PropertyField(m_AllowUnsafeCode, Styles.allowUnsafeCode);
                 EditorGUILayout.PropertyField(m_AutoReferenced, Styles.autoReferenced);
-                EditorGUILayout.PropertyField(m_OverrideReferences, Styles.overrideReferences);
                 EditorGUILayout.PropertyField(m_NoEngineReferences, Styles.noEngineReferences);
+                EditorGUILayout.PropertyField(m_OverrideReferences, Styles.overrideReferences);
+                EditorGUILayout.PropertyField(m_RootNamespace, Styles.rootNamespace);
 
                 EditorGUILayout.EndVertical();
                 GUILayout.Space(10f);
@@ -598,11 +605,12 @@ namespace UnityEditor
             int selectedIndex = EditorGUI.Popup(rect, label, currentlySelectedIndex, m_PrecompileReferenceListEntry.ToArray());
             EditorGUI.EndDisabled();
 
+
             if (selectedIndex > 0)
             {
                 var selectedAssemblyName = m_PrecompileReferenceListEntry[selectedIndex];
-                var assembly = EditorCompilationInterface.Instance.GetAllPrecompiledAssemblies()
-                    .Single(x => AssetPath.GetFileName(x.Path) == selectedAssemblyName);
+                var assembly = m_AssemblyProvider.GetPrecompiledAssemblies(true, EditorUserBuildSettings.activeBuildTargetGroup, EditorUserBuildSettings.activeBuildTarget)
+                    .First(x => AssetPath.GetFileName(x.Path) == selectedAssemblyName);
                 nameProp.stringValue = selectedAssemblyName;
                 pathProp.stringValue = assembly.Path;
                 fileNameProp.stringValue = AssetPath.GetFileName(assembly.Path);
@@ -644,6 +652,7 @@ namespace UnityEditor
 
             state.asset = asset;
             state.assemblyName = data.name;
+            state.rootNamespace = data.rootNamespace;
             state.references = new List<AssemblyDefinitionReference>();
             state.precompiledReferences = new List<PrecompiledReference>();
             state.defineConstraints = new List<DefineConstraint>();
@@ -706,8 +715,10 @@ namespace UnityEditor
                 }
             }
 
-            var nameToPrecompiledReference = EditorCompilationInterface.Instance.GetAllPrecompiledAssemblies()
+            var nameToPrecompiledReference = EditorCompilationInterface.Instance.PrecompiledAssemblyProvider
+                .GetPrecompiledAssemblies(true, EditorUserBuildSettings.activeBuildTargetGroup, EditorUserBuildSettings.activeBuildTarget)
                 .Where(x => (x.Flags & AssemblyFlags.UserAssembly) == AssemblyFlags.UserAssembly)
+                .Distinct()
                 .ToDictionary(x => AssetPath.GetFileName(x.Path), x => x);
             foreach (var precompiledReferenceName in data.precompiledReferences ?? Enumerable.Empty<String>())
             {
@@ -775,6 +786,7 @@ namespace UnityEditor
             CustomScriptAssemblyData data = new CustomScriptAssemblyData();
 
             data.name = state.assemblyName;
+            data.rootNamespace = state.rootNamespace;
 
             if (state.useGUIDs)
             {
@@ -862,6 +874,11 @@ namespace UnityEditor
                     assetProp.objectReferenceValue = obj;
                     var data = CustomScriptAssemblyData.FromJson(((AssemblyDefinitionAsset)assetProp.objectReferenceValue).text);
                     nameProp.stringValue = data.name;
+                }
+                else if (change.changed && obj == null)
+                {
+                    assetProp.objectReferenceValue = obj;
+                    nameProp.stringValue = "";
                 }
             }
         }

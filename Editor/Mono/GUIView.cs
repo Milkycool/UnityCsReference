@@ -5,9 +5,11 @@
 using UnityEngine;
 using System.Runtime.InteropServices;
 using System;
-using UnityEditor.UIElements;
 using UnityEngine.Scripting;
-using UnityEngine.UIElements;
+
+using FrameCapture = UnityEngine.Apple.FrameCapture;
+using FrameCaptureDestination = UnityEngine.Apple.FrameCaptureDestination;
+
 
 namespace UnityEditor
 {
@@ -19,9 +21,10 @@ namespace UnityEditor
 
         int m_DepthBufferBits = 0;
         int m_AntiAliasing = 1;
-        EventInterests m_EventInterests;
         bool m_AutoRepaintOnSceneChange = false;
         private IWindowBackend m_WindowBackend;
+
+        protected EventInterests m_EventInterests;
 
         internal bool SendEvent(Event e)
         {
@@ -30,11 +33,18 @@ namespace UnityEditor
             {
                 SavedGUIState oldState = SavedGUIState.Create();
                 var retval = Internal_SendEvent(e);
+                if (retval)
+                    EditorApplication.SignalTick();
                 oldState.ApplyAndForget();
                 return retval;
             }
 
-            return Internal_SendEvent(e);
+            {
+                var retval = Internal_SendEvent(e);
+                if (retval)
+                    EditorApplication.SignalTick();
+                return retval;
+            }
         }
 
         // Call into C++ here to move the underlying NSViews around
@@ -49,7 +59,7 @@ namespace UnityEditor
             Internal_SetWantsMouseMove(m_EventInterests.wantsMouseMove);
             Internal_SetWantsMouseEnterLeaveWindow(m_EventInterests.wantsMouseMove);
 
-            ((IWindowModel)this).sizeChanged?.Invoke();
+            windowBackend?.SizeChanged();
         }
 
         internal void RecreateContext()
@@ -59,8 +69,6 @@ namespace UnityEditor
 
         Vector2 IWindowModel.size => windowPosition.size;
 
-        Action IWindowModel.sizeChanged { get; set; }
-
         public EventInterests eventInterests
         {
             get { return m_EventInterests; }
@@ -68,14 +76,12 @@ namespace UnityEditor
             {
                 m_EventInterests = value;
 
-                ((IWindowModel)this).eventInterestsChanged?.Invoke();
+                windowBackend?.EventInterestsChanged();
 
                 Internal_SetWantsMouseMove(wantsMouseMove);
                 Internal_SetWantsMouseEnterLeaveWindow(wantsMouseEnterLeaveWindow);
             }
         }
-
-        Action IWindowModel.eventInterestsChanged { get; set; }
 
         Action IWindowModel.onGUIHandler => OldOnGUI;
 
@@ -85,8 +91,7 @@ namespace UnityEditor
             set
             {
                 m_EventInterests.wantsMouseMove = value;
-                ((IWindowModel)this).eventInterestsChanged?.Invoke();
-
+                windowBackend?.EventInterestsChanged();
                 Internal_SetWantsMouseMove(wantsMouseMove);
             }
         }
@@ -97,8 +102,7 @@ namespace UnityEditor
             set
             {
                 m_EventInterests.wantsMouseEnterLeaveWindow = value;
-                ((IWindowModel)this).eventInterestsChanged?.Invoke();
-
+                windowBackend?.EventInterestsChanged();
                 Internal_SetWantsMouseEnterLeaveWindow(wantsMouseEnterLeaveWindow);
             }
         }
@@ -143,6 +147,12 @@ namespace UnityEditor
             }
         }
 
+        IWindowBackend IWindowModel.windowBackend
+        {
+            get { return windowBackend; }
+            set { windowBackend = value; }
+        }
+
         protected virtual void OnEnable()
         {
             windowBackend = EditorWindowBackendManager.GetBackend(this);
@@ -151,6 +161,15 @@ namespace UnityEditor
         protected virtual void OnDisable()
         {
             windowBackend = null;
+        }
+
+        internal void ValidateWindowBackendForCurrentView()
+        {
+            if (!EditorWindowBackendManager.IsBackendCompatible(windowBackend, this))
+            {
+                //We create a new compatible backend
+                windowBackend = EditorWindowBackendManager.GetBackend(this);
+            }
         }
 
         protected virtual void OldOnGUI() {}
@@ -172,7 +191,7 @@ namespace UnityEditor
 
             Internal_SetPosition(windowPosition);
 
-            ((IWindowModel)this).sizeChanged?.Invoke();
+            windowBackend?.SizeChanged();
 
             positionChanged?.Invoke(this);
 
@@ -240,6 +259,31 @@ namespace UnityEditor
                 return;
             GUILayoutUtility.EndLayoutGroup();
             GUI.EndGroup();
+        }
+
+        // we already have renderdoc integration done in GUIView but in cpp
+        // for metal we need a bit more convoluted logic and we can push more things to cs
+        internal void CaptureMetalScene()
+        {
+            if (FrameCapture.IsDestinationSupported(FrameCaptureDestination.DevTools))
+            {
+                FrameCapture.BeginCaptureToXcode();
+                RenderCurrentSceneForCapture();
+                FrameCapture.EndCapture();
+            }
+            else if (FrameCapture.IsDestinationSupported(FrameCaptureDestination.GPUTraceDocument))
+            {
+                string path = EditorUtility.SaveFilePanel("Save Metal GPU Capture", "", PlayerSettings.productName + ".gputrace", "gputrace");
+                if (System.String.IsNullOrEmpty(path))
+                    return;
+
+                FrameCapture.BeginCaptureToFile(path);
+                RenderCurrentSceneForCapture();
+                FrameCapture.EndCapture();
+
+                System.Console.WriteLine("Metal capture saved to " + path);
+                System.Diagnostics.Process.Start(System.IO.Path.GetDirectoryName(path));
+            }
         }
     }
 } //namespace

@@ -135,13 +135,16 @@ namespace UnityEditor
         [FreeFunction("FormatBytes")]
         public static extern string FormatBytes(long bytes);
 
-        [FreeFunction("DisplayProgressbar")]
+        [FreeFunction("DisplayProgressbarLegacy")]
         public static extern void DisplayProgressBar(string title, string info, float progress);
 
         public static extern bool DisplayCancelableProgressBar(string title, string info, float progress);
 
-        [FreeFunction("ClearProgressbar")]
+        [FreeFunction("ClearProgressbarLegacy")]
         public static extern void ClearProgressBar();
+
+        [FreeFunction("BusyProgressDialogDelayChanged")]
+        internal static extern void BusyProgressDialogDelayChanged(float delay);
 
         [FreeFunction("GetObjectEnabled")]
         public static extern int GetObjectEnabled(Object target);
@@ -207,7 +210,7 @@ namespace UnityEditor
         internal static extern void SaveProjectAsTemplate(string targetPath, string name, string displayName, string description, string defaultScene, string version);
 
         [Obsolete("Use AssetDatabase.LoadAssetAtPath", false),
-         FreeFunction("FindAssetWithKlass")]
+         FreeFunction("FindAssetWithKlass", ThrowsException = true)]
         public static extern Object FindAsset(string path, Type type);
 
         [FreeFunction("LoadPlatformSupportModuleNativeDll")]

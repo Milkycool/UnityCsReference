@@ -121,7 +121,7 @@ namespace UnityEditor.Connect
             //Setup dashboard link
             var dashboardClickable = new Clickable(() =>
             {
-                OpenDashboardOrgAndProjectIds(ServicesConfiguration.instance.baseDashboardUrl);
+                ServicesConfiguration.instance.RequestBaseDashboardUrl(OpenDashboardOrgAndProjectIds);
             });
             rootVisualElement.Q(k_DashboardBlockName).AddManipulator(dashboardClickable);
 
@@ -201,6 +201,8 @@ namespace UnityEditor.Connect
                 L10n.Tr(k_Yes),
                 L10n.Tr(k_No)))
             {
+                ServicesRepository.DisableAllServices(shouldUpdateApiFlag: false);
+
                 string cachedProjectName = UnityConnect.instance.projectInfo.projectName;
                 UnityConnect.instance.UnbindProject();
                 EditorAnalytics.SendProjectServiceBindingEvent(new ProjectBindManager.ProjectBindState() { bound = false, projectName = cachedProjectName });

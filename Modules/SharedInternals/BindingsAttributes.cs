@@ -408,4 +408,50 @@ namespace UnityEngine.Bindings
             MarshalAsType = marshalAsType;
         }
     }
+
+    [VisibleToOtherModules]
+    enum PreventExecutionSeverity
+    {
+        PreventExecution_Error,
+        PreventExecution_ManagedException,
+        PreventExecution_NativeException
+    }
+
+    [VisibleToOtherModules]
+    interface IBindingsPreventExecution
+    {
+        object singleFlagValue { get; set; }
+        PreventExecutionSeverity severity { get; set; }
+        string howToFix { get; set; }
+    }
+
+    [VisibleToOtherModules]
+    [AttributeUsage(AttributeTargets.Method | AttributeTargets.Property, AllowMultiple = true)]
+    class PreventExecutionInStateAttribute : Attribute, IBindingsPreventExecution
+    {
+        public object singleFlagValue { get; set; }
+        public PreventExecutionSeverity severity { get; set; }
+        public string howToFix { get; set; }
+
+        public PreventExecutionInStateAttribute(object systemAndFlags, PreventExecutionSeverity reportSeverity, string howToString = "")
+        {
+            singleFlagValue = systemAndFlags;
+            severity = reportSeverity;
+            howToFix = howToString;
+        }
+    }
+
+    /// <summary>
+    ///  Use this attribute on a class if there is a need to be able to make Read-only instances.
+    ///  Any Setters will check if the HideFlags.NotEditable is set to true, and if so, an exception will be thrown to prevent data modification.
+    ///  Only works on classes that can create an instance (not static or abstract classes) and that contain Setters.
+    /// </summary>
+    [VisibleToOtherModules]
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+    class PreventReadOnlyInstanceModificationAttribute : Attribute
+    {
+        public PreventReadOnlyInstanceModificationAttribute()
+        {
+        }
+    }
 }

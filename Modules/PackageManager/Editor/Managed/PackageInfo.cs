@@ -5,7 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Bindings;
@@ -127,6 +126,14 @@ namespace UnityEditor.PackageManager
         private string m_DocumentationUrl = "";
 
         [SerializeField]
+        [NativeName("changelogUrl")]
+        private string m_ChangelogUrl = "";
+
+        [SerializeField]
+        [NativeName("licensesUrl")]
+        private string m_LicensesUrl = "";
+
+        [SerializeField]
         [NativeName("hasRepository")]
         private bool m_HasRepository;
 
@@ -158,6 +165,8 @@ namespace UnityEditor.PackageManager
         internal EntitlementsInfo entitlements { get { return m_Entitlements; } }
         internal bool isAssetStorePackage { get { return m_IsAssetStorePackage;  } }
         public string documentationUrl { get { return m_DocumentationUrl; } }
+        public string changelogUrl { get { return m_ChangelogUrl; } }
+        public string licensesUrl { get { return m_LicensesUrl; } }
 
         public RegistryInfo registry
         {
@@ -196,8 +205,12 @@ namespace UnityEditor.PackageManager
             if (string.IsNullOrEmpty(assetPath))
                 throw new ArgumentException("Asset path cannot be null or empty.", "assetPath");
 
-            var result = new PackageInfo();
-            return TryGetForAssetPath(assetPath, result) ? result : null;
+            var packageInfo = GetPackageByAssetPath(assetPath);
+
+            // We assume the package is found only if the name field is set.
+            // This is because there is no straightforward way to make this nullable in native and,
+            // returning extra arguments with the [Out] attribute has expensive unmarshalling costs.
+            return string.IsNullOrEmpty(packageInfo.name) ? null : packageInfo;
         }
 
         public static PackageInfo FindForAssembly(Assembly assembly)

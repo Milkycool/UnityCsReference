@@ -16,9 +16,12 @@ namespace UnityEditor.Connect
         public override string description { get; }
         public override string pathTowardIcon { get; }
         public override string projectSettingsPath { get; }
+        public override string settingsProviderClassName => nameof(CloudBuildProjectSettings);
         public override bool displayToggle { get; }
         public override Notification.Topic notificationTopic => Notification.Topic.BuildService;
-        public override string packageId { get; }
+        public override string packageName { get; }
+        public override string serviceFlagName { get; }
+        public override bool shouldSyncOnProjectRebind => true;
 
         static readonly BuildService k_Instance;
 
@@ -42,17 +45,18 @@ namespace UnityEditor.Connect
             pathTowardIcon = @"Builtin Skins\Shared\Images\ServicesWindow-ServiceIcon-Build.png";
             projectSettingsPath = "Project/Services/Cloud Build";
             displayToggle = true;
-            packageId = null;
+            packageName = null;
+            serviceFlagName = "build";
             ServicesRepository.AddService(this);
         }
 
-        protected override void InternalEnableService(bool enable)
+        protected override void InternalEnableService(bool enable, bool shouldUpdateApiFlag)
         {
             if (IsServiceEnabled() != enable)
             {
                 EditorAnalytics.SendEventServiceInfo(new BuildServiceState() { build = enable });
             }
-            base.InternalEnableService(enable);
+            base.InternalEnableService(enable, shouldUpdateApiFlag);
         }
     }
 }

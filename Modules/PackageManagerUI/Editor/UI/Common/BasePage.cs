@@ -43,10 +43,19 @@ namespace UnityEditor.PackageManager.UI
 
         public abstract long numCurrentItems { get; }
 
-        public abstract IEnumerable<string> items { get; }
+        public abstract IEnumerable<VisualState> visualStates { get; }
 
-        protected BasePage(PackageFilterTab tab, PageCapability capability)
+        [NonSerialized]
+        protected PackageDatabase m_PackageDatabase;
+        protected void ResolveDependencies(PackageDatabase packageDatabase)
         {
+            m_PackageDatabase = packageDatabase;
+        }
+
+        protected BasePage(PackageDatabase packageDatabase, PackageFilterTab tab, PageCapability capability)
+        {
+            ResolveDependencies(packageDatabase);
+
             m_Tab = tab;
             m_Capability = capability;
             if (m_Filters == null)
@@ -108,33 +117,8 @@ namespace UnityEditor.PackageManager.UI
 
         public void GetSelectedPackageAndVersion(out IPackage package, out IPackageVersion version)
         {
-            GetSelectedPackageAndVersionInternal(out package, out version);
-        }
-
-        protected void RefreshSelected()
-        {
-            IPackage package;
-            IPackageVersion version;
-            GetSelectedPackageAndVersionInternal(out package, out version, true);
-        }
-
-        private void GetSelectedPackageAndVersionInternal(out IPackage package, out IPackageVersion version, bool applyDifference = false)
-        {
             var selected = GetVisualState(m_SelectedUniqueIds.FirstOrDefault());
-            PackageDatabase.instance.GetPackageAndVersion(selected?.packageUniqueId, selected?.selectedVersionId, out package, out version);
-            if (selected?.visible != true || package == null)
-            {
-                var firstVisible = items.FirstOrDefault(id => GetVisualState(id)?.visible == true);
-                package = firstVisible == null ? null : PackageDatabase.instance.GetPackage(firstVisible);
-                version = package?.versions.primary;
-            }
-            else if (version == null)
-            {
-                version = package?.versions.primary;
-            }
-
-            if (applyDifference)
-                SetSelected(package?.uniqueId, version?.uniqueId);
+            m_PackageDatabase.GetPackageAndVersion(selected?.packageUniqueId, selected?.selectedVersionId, out package, out version);
         }
 
         public void SetSelected(IPackage package, IPackageVersion version = null)
@@ -144,8 +128,9 @@ namespace UnityEditor.PackageManager.UI
 
         public void SetSelected(string packageUniqueId, string versionUniqueId)
         {
-            var oldSelection = GetVisualState(m_SelectedUniqueIds.FirstOrDefault());
-            if (oldSelection?.packageUniqueId == packageUniqueId && oldSelection?.selectedVersionId == versionUniqueId)
+            var oldPackageUniqueId = m_SelectedUniqueIds.FirstOrDefault();
+            var oldSelection = GetVisualState(oldPackageUniqueId);
+            if (oldPackageUniqueId == packageUniqueId && oldSelection?.selectedVersionId == versionUniqueId)
                 return;
 
             foreach (var uniqueId in m_SelectedUniqueIds)
@@ -166,7 +151,7 @@ namespace UnityEditor.PackageManager.UI
                 }
             }
             TriggerOnSelectionChanged(GetSelectedVersion());
-            TriggerOnVisualStateChange(new[] { GetVisualState(oldSelection?.packageUniqueId), GetVisualState(packageUniqueId) }.Where(s => s != null));
+            TriggerOnVisualStateChange(new[] { GetVisualState(oldPackageUniqueId), GetVisualState(packageUniqueId) }.Where(s => s != null));
         }
 
         public void SetExpanded(IPackage package, bool value)

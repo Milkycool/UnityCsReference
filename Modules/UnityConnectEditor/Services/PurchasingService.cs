@@ -4,11 +4,9 @@
 
 using System.Text;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using UnityEditor.Purchasing;
-using UnityEditor.Web;
 using UnityEngine;
 using UnityEngine.Networking;
 
@@ -48,9 +46,12 @@ namespace UnityEditor.Connect
         public override string description { get; }
         public override string pathTowardIcon { get; }
         public override string projectSettingsPath { get; }
+        public override string settingsProviderClassName => nameof(PurchasingProjectSettings);
         public override bool displayToggle { get; }
         public override Notification.Topic notificationTopic => Notification.Topic.PurchasingService;
-        public override string packageId { get; }
+        public override string packageName { get; }
+        public override string serviceFlagName { get; }
+        public override bool shouldSyncOnProjectRebind => true;
 
         static readonly PurchasingService k_Instance;
 
@@ -85,13 +86,14 @@ namespace UnityEditor.Connect
         {
             k_PackageUri = new Uri(PurchasingConfiguration.instance.purchasingPackageUrl);
 
-            name = L10n.Tr("Purchasing");
+            name = "Purchasing";
             title = L10n.Tr("In-App Purchasing");
             description = L10n.Tr("Simplify cross-platform IAP");
             pathTowardIcon = @"Builtin Skins\Shared\Images\ServicesWindow-ServiceIcon-Purchasing.png";
             projectSettingsPath = "Project/Services/In-App Purchasing";
             displayToggle = true;
-            packageId = "com.unity.purchasing";
+            packageName = "com.unity.purchasing";
+            serviceFlagName = "purchasing";
             ServicesRepository.AddService(this);
         }
 
@@ -102,7 +104,7 @@ namespace UnityEditor.Connect
 
         public override bool requiresCoppaCompliance => true;
 
-        protected override void InternalEnableService(bool enable)
+        protected override void InternalEnableService(bool enable, bool shouldUpdateApiFlag)
         {
             if (PurchasingSettings.enabled != enable)
             {
@@ -110,11 +112,11 @@ namespace UnityEditor.Connect
                 EditorAnalytics.SendEventServiceInfo(new PurchasingServiceState() { iap = enable });
                 if (enable && !AnalyticsService.instance.IsServiceEnabled())
                 {
-                    AnalyticsService.instance.EnableService(true);
+                    AnalyticsService.instance.EnableService(true, shouldUpdateApiFlag);
                 }
             }
 
-            base.InternalEnableService(enable);
+            base.InternalEnableService(enable, shouldUpdateApiFlag);
         }
 
         /// <summary>
@@ -138,6 +140,7 @@ namespace UnityEditor.Connect
 
             UnityWebRequest request = new UnityWebRequest(k_PackageUri, UnityWebRequest.kHttpVerbGET);
             request.downloadHandler = new DownloadHandlerFile(location);
+            request.suppressErrorsToConsole = true;
             var operation = request.SendWebRequest();
             operation.completed += (asyncOp) =>
             {
@@ -198,6 +201,7 @@ namespace UnityEditor.Connect
         internal void GetLatestETag(Action<AsyncOperation> onGet)
         {
             var request = UnityWebRequest.Head(k_PackageUri);
+            request.suppressErrorsToConsole = true;
             var operation = request.SendWebRequest();
             operation.completed += onGet;
         }
@@ -242,6 +246,7 @@ namespace UnityEditor.Connect
         public void RequestAuthSignature(Action<AsyncOperation> onGet, out UnityWebRequest request)
         {
             request = UnityWebRequest.Get(String.Format(AnalyticsConfiguration.instance.coreProjectsUrl, UnityConnect.instance.projectInfo.projectGUID));
+            request.suppressErrorsToConsole = true;
             request.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
             var operation = request.SendWebRequest();
             operation.completed += onGet;
@@ -250,6 +255,7 @@ namespace UnityEditor.Connect
         public void GetGooglePlayKey(Action<AsyncOperation> onGet, string authSignature)
         {
             var request = UnityWebRequest.Get(GetGoogleKeyResource() + k_GoogleKeyGetSuffix);
+            request.suppressErrorsToConsole = true;
 
             var encodedAuthToken = ServicesUtils.Base64Encode((UnityConnect.instance.projectInfo.projectGUID + ":" + authSignature));
             request.SetRequestHeader("Authorization", $"Basic {encodedAuthToken}");
@@ -265,6 +271,7 @@ namespace UnityEditor.Connect
             var request = new UnityWebRequest(GetGoogleKeyResource() + k_GoogleKeyPostSuffix,
                 UnityWebRequest.kHttpVerbPOST)
             { uploadHandler = uploadHandler};
+            request.suppressErrorsToConsole = true;
 
             var encodedAuthToken = ServicesUtils.Base64Encode((UnityConnect.instance.projectInfo.projectGUID + ":" + authSignature));
             request.SetRequestHeader("Authorization", $"Basic {encodedAuthToken}");
@@ -276,7 +283,7 @@ namespace UnityEditor.Connect
 
         private string GetGoogleKeyResource()
         {
-            return PurchasingConfiguration.instance.googlePlayDevConsoleUrl + k_GoogleKeySubPath + UnityConnect.instance.projectInfo.projectGUID;
+            return PurchasingConfiguration.instance.analyticsApiUrl + k_GoogleKeySubPath + UnityConnect.instance.projectInfo.projectGUID;
         }
     }
 }

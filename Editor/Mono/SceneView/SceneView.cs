@@ -5,6 +5,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -21,9 +22,14 @@ using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 using RequiredByNativeCodeAttribute = UnityEngine.Scripting.RequiredByNativeCodeAttribute;
 using UnityEditor.EditorTools;
+using UnityEditor.Experimental.SceneManagement;
 using UnityEditor.Profiling;
 using UnityEditor.Snap;
+using UnityEngine.Serialization;
 using UnityEngine.UIElements;
+using Component = UnityEngine.Component;
+using FrameCapture = UnityEngine.Apple.FrameCapture;
+using FrameCaptureDestination = UnityEngine.Apple.FrameCaptureDestination;
 
 namespace UnityEditor
 {
@@ -123,6 +129,21 @@ namespace UnityEditor
         {
             get { return m_ShowContextualTools; }
             set { m_ShowContextualTools = value; }
+        }
+
+        internal static Transform GetDefaultParentObjectIfSet()
+        {
+            Transform parentObject = null;
+            var prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+            string activeSceneGUID = prefabStage != null ? prefabStage.scene.guid : EditorSceneManager.GetActiveScene().guid;
+            int id = SceneHierarchy.GetDefaultParentForSession(activeSceneGUID);
+            if (id != 0)
+            {
+                var objectFromInstanceID = EditorUtility.InstanceIDToObject(id) as GameObject;
+                parentObject = objectFromInstanceID?.gameObject?.transform;
+            }
+
+            return parentObject;
         }
 
         static void OnSelectedObjectWasDestroyed(int unused)
@@ -238,11 +259,17 @@ namespace UnityEditor
             get { return new Rect(0, toolbarHeight, position.width, sceneViewHeight); }
         }
 
-        Transform m_CustomParentForDraggedObjects;
+        Transform m_CustomParentForNewGameObjects;
         protected internal Transform customParentForDraggedObjects
         {
-            get { return m_CustomParentForDraggedObjects; }
-            set { m_CustomParentForDraggedObjects = value; }
+            get { return customParentForNewGameObjects; }
+            set { customParentForNewGameObjects = value; }
+        }
+
+        internal Transform customParentForNewGameObjects
+        {
+            get { return m_CustomParentForNewGameObjects; }
+            set { m_CustomParentForNewGameObjects = value; }
         }
 
         [NonSerialized]
@@ -255,8 +282,9 @@ namespace UnityEditor
 
         const float kOrthoThresholdAngle = 3f;
         const float kOneOverSqrt2 = 0.707106781f;
-        // stop short of float.MaxValue to prevent rendering assertions
-        internal const float k_MaxSceneViewSize = 3.2e38f;
+        // Don't allow scene view zoom/size to go to crazy high values, or otherwise various
+        // operations will start going to infinities etc.
+        internal const float k_MaxSceneViewSize = 3.2e34f;
         // Limit the max draw distance to Sqrt(float.MaxValue) because transparent sorting function uses dist^2, and
         // Asserts that values are finite.
         internal const float k_MaxCameraFarClip = 1.844674E+19f;
@@ -282,16 +310,51 @@ namespace UnityEditor
         public event Action<CameraMode>     onCameraModeChanged;
         public event Action<bool>           gridVisibilityChanged;
 
+        private bool m_WasFocused = false;
+
         [Serializable]
         public class SceneViewState
         {
+            [SerializeField, FormerlySerializedAs("showMaterialUpdate")]
+            bool m_AlwaysRefresh;
+
             public bool showFog = true;
-            public bool showMaterialUpdate = false;
+
+            // marked obsolete by @karlh 2020/4/14
+            [EditorBrowsable(EditorBrowsableState.Never)]
+            [Obsolete("Obsolete msg (UnityUpgradable) -> alwaysRefresh")]
+            public bool showMaterialUpdate
+            {
+                get => m_AlwaysRefresh;
+                set => m_AlwaysRefresh = value;
+            }
+
+            public bool alwaysRefresh
+            {
+                get => m_AlwaysRefresh;
+                set => m_AlwaysRefresh = value;
+            }
+
             public bool showSkybox = true;
             public bool showFlares = true;
             public bool showImageEffects = true;
             public bool showParticleSystems = true;
             public bool showVisualEffectGraphs = true;
+
+            public bool fogEnabled => fxEnabled && showFog;
+            // marked obsolete by @karlh 2020/4/14
+            [EditorBrowsable(EditorBrowsableState.Never)]
+            [Obsolete("Obsolete msg (UnityUpgradable) -> alwaysRefreshEnabled")]
+            public bool materialUpdateEnabled => alwaysRefreshEnabled;
+            public bool alwaysRefreshEnabled => fxEnabled && alwaysRefresh;
+            public bool skyboxEnabled => fxEnabled && showSkybox;
+            public bool flaresEnabled => fxEnabled && showFlares;
+            public bool imageEffectsEnabled => fxEnabled && showImageEffects;
+            public bool particleSystemsEnabled => fxEnabled && showParticleSystems;
+            public bool visualEffectGraphsEnabled => fxEnabled && showVisualEffectGraphs;
+
+            [SerializeField]
+            bool m_FxEnabled = true;
 
             public SceneViewState()
             {
@@ -299,8 +362,9 @@ namespace UnityEditor
 
             public SceneViewState(SceneViewState other)
             {
+                fxEnabled = other.fxEnabled;
                 showFog = other.showFog;
-                showMaterialUpdate = other.showMaterialUpdate;
+                alwaysRefresh = other.alwaysRefresh;
                 showSkybox = other.showSkybox;
                 showFlares = other.showFlares;
                 showImageEffects = other.showImageEffects;
@@ -318,13 +382,9 @@ namespace UnityEditor
             {
                 get
                 {
-                    bool all =  showFog && showMaterialUpdate && showSkybox && showFlares && showImageEffects && showParticleSystems;
-
+                    bool all =  showFog && alwaysRefresh && showSkybox && showFlares && showImageEffects && showParticleSystems;
                     if (UnityEngine.VFX.VFXManager.activateVFX)
-                    {
                         all = all && showVisualEffectGraphs;
-                    }
-
                     return all;
                 }
             }
@@ -338,12 +398,18 @@ namespace UnityEditor
             public void SetAllEnabled(bool value)
             {
                 showFog = value;
-                showMaterialUpdate = value;
+                alwaysRefresh = value;
                 showSkybox = value;
                 showFlares = value;
                 showImageEffects = value;
                 showParticleSystems = value;
                 showVisualEffectGraphs = value;
+            }
+
+            public bool fxEnabled
+            {
+                get { return m_FxEnabled; }
+                set { m_FxEnabled = value; }
             }
         }
 
@@ -396,6 +462,7 @@ namespace UnityEditor
         [SerializeField]
         AnimVector3 m_Position = new AnimVector3(kDefaultPivot);
 
+#pragma warning disable 618
         [Obsolete("OnSceneFunc() has been deprecated. Use System.Action instead.")]
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public delegate void OnSceneFunc(SceneView sceneView);
@@ -404,11 +471,16 @@ namespace UnityEditor
         [Obsolete("onSceneGUIDelegate has been deprecated. Use duringSceneGui instead.")]
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public static OnSceneFunc onSceneGUIDelegate;
+#pragma warning restore 618
 
         public static event Action<SceneView> beforeSceneGui;
         public static event Action<SceneView> duringSceneGui;
 
         internal static event Func<SceneView, VisualElement> addCustomVisualElementToSceneView;
+
+        // Used for performance tests
+        internal static event Action<SceneView> onGUIStarted;
+        internal static event Action<SceneView> onGUIEnded;
 
         [Obsolete("Use cameraMode instead", false)]
         public DrawCameraMode m_RenderMode = 0;
@@ -478,9 +550,7 @@ namespace UnityEditor
         [SerializeField]
         float m_ExposureSliderValue = 0.0f;
         // this value can be altered by the user
-        float m_ExposureSliderMax = 10f;
-        // no point of allowing the user to go over this
-        const float kExposureSliderAbsoluteMax = 23.0f;
+        float m_ExposureSliderMax = 16f;
 
         Texture2D m_ExposureTexture = null;
         Texture2D m_EmptyExposureTexture = null;
@@ -495,7 +565,7 @@ namespace UnityEditor
         }
 
         [SerializeField]
-        private SceneViewState m_SceneViewState;
+        SceneViewState m_SceneViewState;
 
         public SceneViewState sceneViewState
         {
@@ -517,8 +587,7 @@ namespace UnityEditor
         [SerializeField]
         internal AnimQuaternion m_Rotation = new AnimQuaternion(kDefaultRotation);
 
-        // How large an area the scene view covers (measured diagonally). Use `size` to immediately affect the scene,
-        // or `targetSize` to lerp the effect
+        // How large an area the scene view covers (measured vertically)
         [SerializeField]
         AnimFloat m_Size = new AnimFloat(kDefaultViewSize);
 
@@ -559,7 +628,7 @@ namespace UnityEditor
             bool m_AccelerationEnabled;
 
             [SerializeField]
-            float m_FieldOfView;
+            float m_FieldOfViewHorizontalOrVertical; // either horizontal or vertical depending on aspect ratio
             [SerializeField]
             float m_NearClip;
             [SerializeField]
@@ -577,7 +646,7 @@ namespace UnityEditor
                 m_SpeedMax = 2f;
                 m_EasingEnabled = true;
                 m_EasingDuration = defaultEasingDuration;
-                fieldOfView = kPerspectiveFov;
+                fieldOfView = kDefaultPerspectiveFov;
                 m_DynamicClip = true;
                 m_OcclusionCulling = false;
                 m_NearClip = .03f;
@@ -671,6 +740,12 @@ namespace UnityEditor
             // range of appropriate values
             internal float RoundSpeedToNearestSignificantDecimal(float value)
             {
+                if (value <= speedMin)
+                    return speedMin;
+
+                if (value >= speedMax)
+                    return speedMax;
+
                 float rng = speedMax - speedMin;
                 int min_rnd = speedMin < .01f ? 3 : speedMin < .1f ? 2 : speedMin < 1f ? 1 : 0;
                 int rng_rnd = rng < 1f ? 2 : rng < 10f ? 1 : 0;
@@ -699,8 +774,8 @@ namespace UnityEditor
 
             public float fieldOfView
             {
-                get { return m_FieldOfView; }
-                set { m_FieldOfView = value; }
+                get { return m_FieldOfViewHorizontalOrVertical; }
+                set { m_FieldOfViewHorizontalOrVertical = value; }
             }
 
             public float nearClip
@@ -790,20 +865,44 @@ namespace UnityEditor
 
         internal static void AddCursorRect(Rect rect, MouseCursor cursor)
         {
-            if (Event.current.type == EventType.Repaint)
+            var eventType = Event.current.type;
+            if (eventType == EventType.Repaint || eventType == EventType.MouseMove)
                 s_MouseRects.Add(new CursorRect(rect, cursor));
+        }
+
+        static float GetPerspectiveCameraDistance(float objectSize, float fov)
+        {
+            //        A
+            //        |\        We want to place camera at a
+            //        | \       distance that, at the given FOV,
+            //        |  \      would enclose a sphere of radius
+            //     _..+.._\     "size". Here |BC|=size, and we
+            //   .'   |   '\    need to find |AB|. ACB is a right
+            //  /     |    _C   angle, andBAC is half the FOV. So
+            // |      | _-   |  that gives: sin(BAC)=|BC|/|AB|,
+            // |      B      |  and thus |AB|=|BC|/sin(BAC).
+            // |             |
+            //  \           /
+            //   '._     _.'
+            //      `````
+            return objectSize / Mathf.Sin(fov * 0.5f * Mathf.Deg2Rad);
         }
 
         public float cameraDistance
         {
             get
             {
-                float fov = m_Ortho.Fade(kPerspectiveFov, 0);
-
+                float res;
                 if (!camera.orthographic)
-                    return size / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                {
+                    float fov = m_Ortho.Fade(perspectiveFov, 0);
+                    res = GetPerspectiveCameraDistance(size, fov);
+                }
+                else
+                    res = size * 2f;
 
-                return size * 2f;
+                // clamp to allowed range in case scene view size was huge
+                return Mathf.Clamp(res, -k_MaxSceneViewSize, k_MaxSceneViewSize);
             }
         }
 
@@ -814,7 +913,7 @@ namespace UnityEditor
 
         RectSelection m_RectSelection;
 
-        const float kPerspectiveFov = 90;
+        const float kDefaultPerspectiveFov = 60;
 
         static ArrayList s_SceneViews = new ArrayList();
         public static ArrayList sceneViews { get { return s_SceneViews; } }
@@ -828,7 +927,6 @@ namespace UnityEditor
         static Shader s_ShowMipsShader;
         static Shader s_ShowTextureStreamingShader;
         static Shader s_AuraShader;
-        static Shader s_BuildFilterShader;
         static Material s_FadeMaterial;
         static Material s_ApplyFilterMaterial;
         static Texture2D s_MipColorsTexture;
@@ -851,10 +949,10 @@ namespace UnityEditor
             public static GUIContent gridZToolbarContent = EditorGUIUtility.TrIconContent("GridAxisZ", "Toggle the visibility of the grid");
             public static GUIContent isolationModeExitButton = EditorGUIUtility.TrTextContent("Exit", "Exit isolation mode");
             public static GUIContent renderDocContent;
+            public static GUIContent metalFrameCaptureContent = EditorGUIUtility.TrIconContent("FrameCapture", "Capture the current view and open in Xcode frame debugger");
             public static GUIContent sceneVisToolbarButtonContent = EditorGUIUtility.TrIconContent("SceneViewVisibility", "Number of hidden objects, click to toggle scene visibility");
             public static GUIStyle gizmoButtonStyle;
             public static GUIContent sceneViewCameraContent = EditorGUIUtility.TrIconContent("SceneViewCamera", "Settings for the Scene view camera.");
-            public static GUIContent exposureIcon = EditorGUIUtility.TrIconContent("Exposure", "Controls the number of stops to over or under expose the precomputed and baked lighting debug views.");
             public static GUIContent contributeGIOff = EditorGUIUtility.TrTextContent("Contribute GI Off");
             public static GUIContent receiveGILightmaps = EditorGUIUtility.TrTextContent("Contribute GI / Receive GI Lightmaps");
             public static GUIContent receiveGILightProbes = EditorGUIUtility.TrTextContent("Contribute GI / Receive GI Light Probes");
@@ -862,7 +960,7 @@ namespace UnityEditor
             static Styles()
             {
                 gizmoButtonStyle = "GV Gizmo DropDown";
-                renderDocContent = EditorGUIUtility.TrIconContent("renderdoc", UnityEditor.RenderDocUtil.openInRenderDocLabel);
+                renderDocContent = EditorGUIUtility.TrIconContent("FrameCapture", UnityEditor.RenderDocUtil.openInRenderDocLabel);
             }
         }
 
@@ -895,7 +993,7 @@ namespace UnityEditor
 
         internal bool m_ShowSceneViewWindows = false;
         SceneViewOverlay m_SceneViewOverlay;
-        EditorCache m_DragEditorCache;
+        internal EditorCache m_DragEditorCache;
 
         // While Locking the view to object, we have different behaviour for different scenarios:
         // Smooth camera behaviour: User dragging the handles
@@ -1006,6 +1104,7 @@ namespace UnityEditor
         {
             titleContent = GetLocalizedTitleContent();
             m_RectSelection = new RectSelection(this);
+            SceneViewMotion.ResetDragState();
 
             if (m_Grid == null)
                 m_Grid = new SceneViewGrid();
@@ -1027,6 +1126,7 @@ namespace UnityEditor
             sceneViewGrids.gridVisibilityChanged += GridOnGridVisibilityChanged;
 
             wantsMouseMove = true;
+            wantsLessLayoutEvents = true;
             wantsMouseEnterLeaveWindow = true;
             s_SceneViews.Add(this);
 
@@ -1077,6 +1177,8 @@ namespace UnityEditor
             m_CameraViewVisualElement = CreateCameraRectVisualElement();
 
             rootVisualElement.Add(m_CameraViewVisualElement);
+
+            Repaint();
         }
 
         VisualElement CreateCameraRectVisualElement()
@@ -1089,7 +1191,7 @@ namespace UnityEditor
                 renderHints = RenderHints.ClipWithScissors
             };
             root.pseudoStates |= PseudoStates.Root;
-            UIElements.UIElementsEditorUtility.AddDefaultEditorStyleSheets(root);
+            EditorUIService.instance.AddDefaultEditorStyleSheets(root);
             root.style.overflow = UnityEngine.UIElements.Overflow.Hidden;
             root.style.position = Position.Absolute;
 
@@ -1269,6 +1371,12 @@ namespace UnityEditor
             RefreshToolbarHeight();
         }
 
+        internal override void OnMaximized()
+        {
+            SceneViewMotion.ResetDragState();
+            Repaint();
+        }
+
         void RefreshToolbarHeight()
         {
             if (m_CameraViewVisualElement != null)
@@ -1301,15 +1409,15 @@ namespace UnityEditor
                 audioPlay = GUILayout.Toggle(audioPlay, Styles.audioPlayContent, EditorStyles.toolbarButton);
             }
 
-            var allOn = sceneViewState.allEnabled;
-            if (EditorGUILayout.DropDownToggle(ref allOn, Styles.fx, EditorStyles.toolbarDropDownToggle))
+            var enabled = sceneViewState.fxEnabled;
+            if (EditorGUILayout.DropDownToggle(ref enabled, Styles.fx, EditorStyles.toolbarDropDownToggle))
             {
                 Rect rect = GUILayoutUtility.topLevel.GetLast();
                 PopupWindow.Show(rect, new SceneFXWindow(this));
                 GUIUtility.ExitGUI();
             }
-            else if (allOn != sceneViewState.allEnabled)
-                sceneViewState.SetAllEnabled(allOn);
+
+            sceneViewState.fxEnabled = enabled;
         }
 
         void ToolbarGridDropdownGUI()
@@ -1376,6 +1484,21 @@ namespace UnityEditor
             }
         }
 
+        void ToolbarMetalCaptureGUI()
+        {
+            bool canCapture = FrameCapture.IsDestinationSupported(FrameCaptureDestination.DevTools)
+                || FrameCapture.IsDestinationSupported(FrameCaptureDestination.GPUTraceDocument);
+
+            if (canCapture)
+            {
+                if (GUILayout.Button(Styles.metalFrameCaptureContent, EditorStyles.toolbarButton))
+                {
+                    m_Parent.CaptureMetalScene();
+                    GUIUtility.ExitGUI();
+                }
+            }
+        }
+
         void ToolbarSearchFieldGUI()
         {
             if (m_MainViewControlID != GUIUtility.keyboardControl
@@ -1413,6 +1536,7 @@ namespace UnityEditor
                 GUILayout.FlexibleSpace();
 
                 ToolbarRenderDocGUI();
+                ToolbarMetalCaptureGUI();
                 ToolbarSceneToolsGUI();
                 ToolbarSceneCameraGUI();
                 ToolbarGizmosDropdownGUI();
@@ -1450,10 +1574,13 @@ namespace UnityEditor
         {
             Rect sceneCameraRect = GUILayoutUtility.GetRect(Styles.sceneViewCameraContent, EditorStyles.toolbarDropDown);
 
+            var evt = Event.current;
+            if (evt.type == EventType.ContextClick && sceneCameraRect.Contains(evt.mousePosition))
+                SceneViewCameraWindow.ShowContextMenu(this);
+
             if (EditorGUI.DropdownButton(sceneCameraRect, Styles.sceneViewCameraContent, FocusType.Passive, EditorStyles.toolbarDropDown))
             {
-                Rect rect = GUILayoutUtility.topLevel.GetLast();
-                PopupWindow.Show(rect, new SceneViewCameraWindow(this));
+                PopupWindow.Show(sceneCameraRect, new SceneViewCameraWindow(this));
                 GUIUtility.ExitGUI();
             }
         }
@@ -1518,6 +1645,8 @@ namespace UnityEditor
         {
             if (Selection.activeObject != null && m_LastLockedObject != Selection.activeObject)
                 viewIsLockedToObject = false;
+
+            m_WasFocused = false;
 
             Repaint();
         }
@@ -1731,7 +1860,7 @@ namespace UnityEditor
             oldShadowDistance = QualitySettings.shadowDistance;
             if (Event.current.type == EventType.Repaint)
             {
-                if (!sceneViewState.showFog)
+                if (!sceneViewState.fogEnabled)
                     Unsupported.SetRenderSettingsUseFogNoDirty(false);
                 if (m_Camera.orthographic)
                     Unsupported.SetQualitySettingsShadowDistanceTemporarily(QualitySettings.shadowDistance + 0.5f * cameraDistance);
@@ -1961,7 +2090,7 @@ namespace UnityEditor
 
             // First pass: Draw the scene normally in destination render texture, save color buffer for later
             DoClearCamera(groupSpaceCameraRect);
-            Handles.DrawCamera(groupSpaceCameraRect, m_Camera, m_CameraMode.drawMode);
+            Handles.DrawCamera(groupSpaceCameraRect, m_Camera, m_CameraMode.drawMode, drawGizmos);
 
             var colorDesc = m_SceneTargetTexture.descriptor;
             colorDesc.depthBufferBits = 0;
@@ -1982,7 +2111,7 @@ namespace UnityEditor
                 s_AuraShader = EditorGUIUtility.LoadRequired("SceneView/SceneViewAura.shader") as Shader;
             m_Camera.SetReplacementShader(s_AuraShader, "");
             Handles.SetCameraFilterMode(m_Camera, Handles.CameraFilterMode.ShowFiltered);
-            Handles.DrawCamera(groupSpaceCameraRect, m_Camera, m_CameraMode.drawMode);
+            Handles.DrawCamera(groupSpaceCameraRect, m_Camera, m_CameraMode.drawMode, drawGizmos);
 
             var fadedDesc = m_SceneTargetTexture.descriptor;
             colorDesc.depthBufferBits = 0;
@@ -1993,11 +2122,8 @@ namespace UnityEditor
             // Fourth pass: Draw objects which do meet filter in a mask
             RenderTexture.active = m_SceneTargetTexture;
             GL.Clear(false, true, Color.clear);
-
-            if (!s_BuildFilterShader)
-                s_BuildFilterShader = EditorGUIUtility.LoadRequired("SceneView/SceneViewBuildFilter.shader") as Shader;
-            m_Camera.SetReplacementShader(s_BuildFilterShader, "");
-            Handles.DrawCamera(groupSpaceCameraRect, m_Camera, m_CameraMode.drawMode);
+            m_Camera.ResetReplacementShader();
+            Handles.DrawCamera(groupSpaceCameraRect, m_Camera, m_CameraMode.drawMode, drawGizmos);
 
             // Final pass: Blit the faded scene where the mask isn't set
             if (!s_ApplyFilterMaterial)
@@ -2440,18 +2566,8 @@ namespace UnityEditor
 
         internal void DrawLightingExposureSlider()
         {
-            float labelWidth = EditorGUIUtility.labelWidth;
-            EditorGUIUtility.labelWidth = 20;
-            m_ExposureSliderValue = EditorGUILayout.Slider(Styles.exposureIcon, m_ExposureSliderValue, -m_ExposureSliderMax,
-                m_ExposureSliderMax, -kExposureSliderAbsoluteMax, kExposureSliderAbsoluteMax, EditorStyles.toolbarSlider);
+            m_ExposureSliderValue = EditorGUIInternal.ExposureSlider(m_ExposureSliderValue, ref m_ExposureSliderMax, EditorStyles.toolbarSlider);
 
-            // This will allow the user to set a new max value for the current session
-            if (m_ExposureSliderValue >= 0)
-                m_ExposureSliderMax = Mathf.Max(m_ExposureSliderMax, m_ExposureSliderValue);
-            else
-                m_ExposureSliderMax = Mathf.Max(m_ExposureSliderMax, m_ExposureSliderValue * -1);
-
-            EditorGUIUtility.labelWidth = labelWidth;
             Unsupported.SetSceneViewDebugModeExposureNoDirty(m_ExposureSliderValue);
         }
 
@@ -2573,6 +2689,8 @@ namespace UnityEditor
 
         protected virtual void OnGUI()
         {
+            onGUIStarted?.Invoke(this);
+
             s_CurrentDrawingSceneView = this;
 
             Event evt = Event.current;
@@ -2583,15 +2701,15 @@ namespace UnityEditor
                 Tools.InvalidateHandlePosition(); // Some cases that should invalidate the cached position are not handled correctly yet so we refresh it once per frame
             }
 
+            sceneViewGrids.UpdateGridColor();
+
             Color origColor = GUI.color;
             Rect origCameraRect = m_Camera.rect;
             Rect windowSpaceCameraRect = cameraRect;
 
             HandleClickAndDragToFocus();
 
-            if (evt.type == EventType.Layout)
-                m_ShowSceneViewWindows = (lastActiveSceneView == this);
-
+            m_ShowSceneViewWindows = (lastActiveSceneView == this);
             m_SceneViewOverlay.Begin();
 
             bool oldFog;
@@ -2657,7 +2775,9 @@ namespace UnityEditor
             //Ensure that the target texture is clamped [0-1]
             //This is needed because otherwise gizmo rendering gets all
             //messed up (think HDR target with value of 50 + alpha blend gizmo... gonna be white!)
-            if (!UseSceneFiltering() && evt.type == EventType.Repaint && GraphicsFormatUtility.IsIEEE754Format(m_SceneTargetTexture.graphicsFormat))
+
+            bool hdrDisplayActive = (m_Parent != null && m_Parent.actualView == this && m_Parent.hdrActive);
+            if (!UseSceneFiltering() && evt.type == EventType.Repaint && GraphicsFormatUtility.IsIEEE754Format(m_SceneTargetTexture.graphicsFormat) && !hdrDisplayActive)
             {
                 var currentDepthBuffer = Graphics.activeDepthBuffer;
                 var rtDesc = m_SceneTargetTexture.descriptor;
@@ -2726,18 +2846,15 @@ namespace UnityEditor
 
             // Handle scene view motion when this scene view is active (always after duringSceneGui and Tools, so that
             // user tools can access RMB and alt keys if they want to override the event)
-            if (s_LastActiveSceneView == this)
-            {
-                // Do not pass the camera transform to the SceneViewMotion calculations.
-                // The camera transform is calculation *output* not *input*.
-                // Avoiding using it as input too avoids errors accumulating.
-                SceneViewMotion.DoViewTool(this);
-            }
+            // Do not pass the camera transform to the SceneViewMotion calculations.
+            // The camera transform is calculation *output* not *input*.
+            // Avoiding using it as input too avoids errors accumulating.
+            SceneViewMotion.DoViewTool(this);
 
             Handles.SetCameraFilterMode(Camera.current, UseSceneFiltering() ? Handles.CameraFilterMode.ShowFiltered : Handles.CameraFilterMode.Off);
 
             // Handle scene commands after EditorTool.OnSceneGUI so that tools can handle commands
-            if (evt.type == EventType.ExecuteCommand || evt.type == EventType.ValidateCommand)
+            if (evt.type == EventType.ExecuteCommand || evt.type == EventType.ValidateCommand || evt.keyCode == KeyCode.Escape)
                 CommandsGUI();
 
             Handles.SetCameraFilterMode(Camera.current, Handles.CameraFilterMode.Off);
@@ -2773,6 +2890,7 @@ namespace UnityEditor
             s_CurrentDrawingSceneView = null;
             m_Camera.rect = origCameraRect;
 
+            onGUIEnded?.Invoke(this);
             if (m_StageHandling != null)
                 m_StageHandling.EndOnGUI();
 
@@ -2952,14 +3070,18 @@ namespace UnityEditor
         void HandleMouseCursor()
         {
             Event evt = Event.current;
+            Rect cursorRect = new Rect(0, 0, position.width, position.height);
+            var checkMouseRects = evt.type == EventType.MouseMove || evt.type == EventType.Repaint;
+
             if (GUIUtility.hotControl == 0)
                 s_DraggingCursorIsCached = false;
-            Rect cursorRect = new Rect(0, 0, position.width, position.height);
+
             if (!s_DraggingCursorIsCached)
             {
                 // Determine if mouse is inside a new cursor rect
+                bool repaintView = false;
                 MouseCursor cursor = MouseCursor.Arrow;
-                if (evt.type == EventType.MouseMove || evt.type == EventType.Repaint)
+                if (checkMouseRects)
                 {
                     foreach (CursorRect r in s_MouseRects)
                     {
@@ -2967,24 +3089,29 @@ namespace UnityEditor
                         {
                             cursor = r.cursor;
                             cursorRect = r.rect;
+                            repaintView = true;
                         }
                     }
+
                     if (GUIUtility.hotControl != 0)
                         s_DraggingCursorIsCached = true;
-                    if (cursor != s_LastCursor)
+
+                    var cursorChanged = cursor != s_LastCursor;
+                    if (cursorChanged)
                     {
                         s_LastCursor = cursor;
                         InternalEditorUtility.ResetCursor();
+                    }
+                    if (repaintView || cursorChanged)
+                    {
                         Repaint();
                     }
                 }
             }
+
             // Apply the one relevant cursor rect
-            if (evt.type == EventType.Repaint && s_LastCursor != MouseCursor.Arrow)
-            {
+            if (checkMouseRects && s_LastCursor != MouseCursor.Arrow)
                 EditorGUIUtility.AddCursorRect(cursorRect, s_LastCursor);
-                // GUI.color = Color.magenta; GUI.Box (rect, ""); EditorGUI.DropShadowLabel (rect, ""+s_LastCursor); GUI.color = Color.white;
-            }
         }
 
         void DrawRenderModeOverlay(Rect cameraRect)
@@ -3032,7 +3159,7 @@ namespace UnityEditor
 
         static float ValidateSceneSize(float value)
         {
-            if (value == 0f)
+            if (value == 0f || float.IsNaN(value))
                 return float.Epsilon;
             if (value > k_MaxSceneViewSize)
                 return k_MaxSceneViewSize;
@@ -3047,19 +3174,14 @@ namespace UnityEditor
             set { m_Size.value = ValidateSceneSize(value); }
         }
 
+        // ReSharper disable once UnusedMember.Global - used only in editor tests
         internal float targetSize
         {
             get { return m_Size.target; }
             set { m_Size.target = ValidateSceneSize(value); }
         }
 
-        float perspectiveFov
-        {
-            get
-            {
-                return m_CameraSettings.fieldOfView;
-            }
-        }
+        float perspectiveFov => m_CameraSettings.fieldOfView;
 
         public bool orthographic
         {
@@ -3080,10 +3202,10 @@ namespace UnityEditor
 
             if (size < 0)
             {
-                float distance = size / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                float distance = GetPerspectiveCameraDistance(size, fov);
                 Vector3 p = m_Position.value + rotation * new Vector3(0, 0, -distance);
                 size = -size;
-                distance = size / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                distance = GetPerspectiveCameraDistance(size, fov);
                 m_Position.value = p + rotation * new Vector3(0, 0, distance);
             }
         }
@@ -3091,11 +3213,10 @@ namespace UnityEditor
         float CalcCameraDist()
         {
             float fov = m_Ortho.Fade(perspectiveFov, 0);
-
             if (fov > kOrthoThresholdAngle)
             {
                 m_Camera.orthographic = false;
-                return size / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                return GetPerspectiveCameraDistance(size, fov);
             }
             return 0;
         }
@@ -3195,13 +3316,13 @@ namespace UnityEditor
 
             if (Event.current.type == EventType.Repaint)
             {
-                bool enableImageEffects = m_CameraMode.drawMode == DrawCameraMode.Textured && sceneViewState.showImageEffects;
+                bool enableImageEffects = m_CameraMode.drawMode == DrawCameraMode.Textured && sceneViewState.imageEffectsEnabled;
                 UpdateImageEffects(enableImageEffects);
             }
 
-            EditorUtility.SetCameraAnimateMaterials(m_Camera, sceneViewState.showMaterialUpdate);
-            ParticleSystemEditorUtils.renderInSceneView = m_SceneViewState.showParticleSystems;
-            UnityEngine.VFX.VFXManager.renderInSceneView = m_SceneViewState.showVisualEffectGraphs;
+            EditorUtility.SetCameraAnimateMaterials(m_Camera, sceneViewState.alwaysRefreshEnabled);
+            ParticleSystemEditorUtils.renderInSceneView = m_SceneViewState.particleSystemsEnabled;
+            UnityEngine.VFX.VFXManager.renderInSceneView = m_SceneViewState.visualEffectGraphsEnabled;
             SceneVisibilityManager.instance.enableSceneVisibility = m_SceneVisActive;
             ResetIfNaN();
 
@@ -3212,20 +3333,11 @@ namespace UnityEditor
             if (fov > kOrthoThresholdAngle)
             {
                 m_Camera.orthographic = false;
-
-                // Old calculations were strange and were more zoomed in for tall aspect ratios than for wide ones.
-                //m_Camera.fieldOfView = Mathf.Sqrt((fov * fov) / (1 + aspect));
-                // 1:1: Sqrt((90*90) / (1+1))   = 63.63 degrees = atan(0.6204)  -  means we have 0.6204 x 0.6204 in tangents
-                // 2:1: Sqrt((90*90) / (1+2))   = 51.96 degrees = atan(0.4873)  -  means we have 0.9746 x 0.4873 in tangents
-                // 1:2: Sqrt((90*90) / (1+0.5)) = 73.48 degrees = atan(0.7465)  -  means we have 0.3732 x 0.7465 in tangents - 25% more zoomed in!
-
                 m_Camera.fieldOfView = GetVerticalFOV(fov);
             }
             else
             {
                 m_Camera.orthographic = true;
-
-                //m_Camera.orthographicSize = Mathf.Sqrt((size * size) / (1 + aspect));
                 m_Camera.orthographicSize = GetVerticalOrthoSize();
             }
 
@@ -3261,8 +3373,8 @@ namespace UnityEditor
                 m_CameraMode.drawMode == DrawCameraMode.TexturedWire ||
                 m_CameraMode.drawMode == DrawCameraMode.UserDefined)
             {
-                Handles.EnableCameraFlares(m_Camera, sceneViewState.showFlares);
-                Handles.EnableCameraSkybox(m_Camera, sceneViewState.showSkybox);
+                Handles.EnableCameraFlares(m_Camera, sceneViewState.flaresEnabled);
+                Handles.EnableCameraSkybox(m_Camera, sceneViewState.skyboxEnabled);
             }
             else
             {
@@ -3315,26 +3427,42 @@ namespace UnityEditor
 
         void UpdateAnimatedMaterials()
         {
-            if (sceneViewState.showMaterialUpdate && m_lastRenderedTime + 0.033f < EditorApplication.timeSinceStartup)
+            if (sceneViewState.alwaysRefreshEnabled && m_lastRenderedTime + 0.033f < EditorApplication.timeSinceStartup)
             {
                 m_lastRenderedTime = EditorApplication.timeSinceStartup;
                 Repaint();
             }
         }
 
-        internal Quaternion cameraTargetRotation { get { return m_Rotation.target; } }
+        // ReSharper disable once UnusedMember.Global - used in tests
+        internal Quaternion cameraTargetRotation => m_Rotation.target;
 
-        internal Vector3 cameraTargetPosition { get { return m_Position.target + m_Rotation.target * new Vector3(0, 0, -cameraDistance); } }
+        // ReSharper disable once UnusedMember.Global - used in tests
+        internal Vector3 cameraTargetPosition => m_Position.target + m_Rotation.target * new Vector3(0, 0, -cameraDistance);
 
+        // ReSharper disable once MemberCanBePrivate.Global - used in tests
         internal float GetVerticalFOV(float aspectNeutralFOV)
         {
-            float verticalHalfFovTangent = Mathf.Tan(aspectNeutralFOV * 0.5f * Mathf.Deg2Rad) * kOneOverSqrt2 / Mathf.Sqrt(m_Camera.aspect);
-            return Mathf.Atan(verticalHalfFovTangent) * 2 * Mathf.Rad2Deg;
+            // We want Scene view camera "FOV" to be the vertical FOV if the
+            // Scene view is wider than tall, and the horizontal FOV otherwise.
+            float multiplier = 1.0f;
+            if (m_Camera.aspect < 1)
+                multiplier /= m_Camera.aspect;
+            float halfFovRad = aspectNeutralFOV * 0.5f * Mathf.Deg2Rad;
+            float halfFovTan = Mathf.Tan(halfFovRad) * multiplier;
+            return Mathf.Atan(halfFovTan) * 2 * Mathf.Rad2Deg;
         }
 
-        internal float GetVerticalOrthoSize()
+        float GetVerticalOrthoSize()
         {
-            return size * kOneOverSqrt2 / Mathf.Sqrt(m_Camera.aspect);
+            // We want scene view ortho size to enclose sphere of
+            // radius "size". If scene view is more tall than wide,
+            // we want to take that into account so that the bounds
+            // fit in horizontally.
+            float res = size;
+            if (m_Camera.aspect < 1.0)
+                res /= m_Camera.aspect;
+            return res;
         }
 
         // Look at a specific point.
@@ -3370,7 +3498,7 @@ namespace UnityEditor
             FixNegativeSize();
             m_Position.target = point;
             m_Rotation.target = direction;
-            m_Size.target = Mathf.Abs(newSize);
+            m_Size.target = ValidateSceneSize(Mathf.Abs(newSize));
             // Update name in the top-right handle
             svRot.UpdateGizmoLabel(this, direction * Vector3.forward, m_Ortho.target);
         }
@@ -3410,7 +3538,7 @@ namespace UnityEditor
             {
                 m_Position.target = point;
                 m_Rotation.target = direction;
-                m_Size.target = Mathf.Abs(newSize);
+                m_Size.target = ValidateSceneSize(Mathf.Abs(newSize));
                 m_Ortho.target = ortho;
             }
 
@@ -3438,59 +3566,117 @@ namespace UnityEditor
 
         void CleanupEditorDragFunctions()
         {
-            if (m_DragEditorCache != null)
-                m_DragEditorCache.Dispose();
+            m_DragEditorCache?.Dispose();
             m_DragEditorCache = null;
         }
 
-        void CallEditorDragFunctions()
+        bool CallEditorDragFunctions(IList<Object> dragAndDropObjects)
         {
             Event evt = Event.current;
 
             SpriteUtility.OnSceneDrag(this);
 
-            if (evt.type == EventType.Used)
-                return;
-
-            if (DragAndDrop.objectReferences.Length == 0)
-                return;
+            if (evt.type == EventType.Used || dragAndDropObjects.Count == 0) return true;
 
             if (m_DragEditorCache == null)
                 m_DragEditorCache = new EditorCache(EditorFeatures.OnSceneDrag);
 
-            foreach (Object o in DragAndDrop.objectReferences)
+            bool allHandled = true;
+
+            // We iterate through dragged items backwards to preserve the alphabetical order
+            // of GameObjects when they are created in hierarchy once drag is performed
+            for (int i = dragAndDropObjects.Count - 1; i >= 0; i--)
             {
-                if (o == null)
+                if (dragAndDropObjects[i] == null)
                     continue;
 
-                EditorWrapper w = m_DragEditorCache[o];
-                if (w != null)
-                    w.OnSceneDrag(this);
+                EditorWrapper w = m_DragEditorCache[dragAndDropObjects[i]];
 
-                if (evt.type == EventType.Used)
-                    return;
+                if (w == null)
+                {
+                    allHandled = false;
+                    continue;
+                }
+                w.OnSceneDrag(this, dragAndDropObjects.Count - 1 - i);
             }
+
+            return allHandled;
+        }
+
+        internal static bool CanDoDrag(ICollection<Object> objects)
+        {
+            if (objects.Count < 2) return true;
+
+            int gameObjectCount = 0;
+            int assetCount = 0;
+            int materialCount = 0;
+
+            // Only allow dragging multiple GameObjects, or multiple non-GameObjects, but not mixed sets.
+            // For example when dragging GameObjects and Materials would sometimes apply material to
+            // already existing scene object, and other times to the object being spawned. It depends
+            // on the order in which the user selects those assets. We decided it was not an intuitive
+            // behavior and it should just not be allowed.
+            // Also we don't want multiple materials be dropped into scene because there is no case
+            // where we can handle it in a way that benefit the user. For example multiple skybox
+            // materials doesn't make sense and dropping multiple materials onto geometry will only
+            // drop the first material on the hovered material entry.
+            foreach (Object obj in objects)
+            {
+                if (obj.GetType() == typeof(GameObject))
+                {
+                    gameObjectCount++;
+                }
+                else
+                {
+                    assetCount++;
+                    if (obj.GetType() == typeof(Material))
+                    {
+                        materialCount++;
+                    }
+                }
+
+                if (gameObjectCount > 0 && assetCount > 0 || materialCount > 1) return false;
+            }
+
+            return true;
         }
 
         void HandleDragging()
         {
             Event evt = Event.current;
 
+            Object[] dragAndDropObjects = DragAndDrop.objectReferences;
+
             switch (evt.type)
             {
                 case EventType.DragPerform:
                 case EventType.DragUpdated:
-                    CallEditorDragFunctions();
+                    if (evt.type == EventType.DragPerform && GameObjectInspector.s_CyclicNestingDetected)
+                    {
+                        PrefabUtility.ShowCyclicNestingWarningDialog();
+                        return;
+                    }
 
-                    if (evt.type == EventType.Used)
+                    if (!CanDoDrag(dragAndDropObjects))
+                    {
+                        DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
+                        break;
+                    }
+
+                    bool allHandled = CallEditorDragFunctions(dragAndDropObjects);
+
+                    if (evt.type == EventType.Used || allHandled)
                         break;
 
                     bool isPerform = evt.type == EventType.DragPerform;
                     // call old-style C++ dragging handlers
                     if (DragAndDrop.visualMode != DragAndDropVisualMode.Copy)
                     {
+                        var defaultParentObject = GetDefaultParentObjectIfSet();
+                        var parent = defaultParentObject != null ? defaultParentObject : customParentForDraggedObjects;
+
                         GameObject go = HandleUtility.PickGameObject(Event.current.mousePosition, true);
-                        DragAndDrop.visualMode = DragAndDropService.Drop(DragAndDropService.kSceneDropDstId, go, pivot, Event.current.mousePosition, customParentForDraggedObjects, isPerform);
+                        DragAndDrop.visualMode = DragAndDropService.Drop(DragAndDropService.kSceneDropDstId, go, pivot, Event.current.mousePosition, parent, isPerform);
                     }
 
                     if (isPerform && DragAndDrop.visualMode != DragAndDropVisualMode.None)
@@ -3504,7 +3690,7 @@ namespace UnityEditor
                     evt.Use();
                     break;
                 case EventType.DragExited:
-                    CallEditorDragFunctions();
+                    CallEditorDragFunctions(dragAndDropObjects);
                     CleanupEditorDragFunctions();
                     break;
             }
@@ -3515,6 +3701,7 @@ namespace UnityEditor
             // @TODO: Validation should be more accurate based on what the view supports
 
             bool execute = Event.current.type == EventType.ExecuteCommand;
+
             switch (Event.current.commandName)
             {
                 case EventCommandNames.Find:
@@ -3523,13 +3710,17 @@ namespace UnityEditor
                     Event.current.Use();
                     break;
                 case EventCommandNames.FrameSelected:
-                    if (execute)
+                    if (execute && Tools.s_ButtonDown != 1)
+                    {
                         FrameSelected(false);
+                    }
                     Event.current.Use();
                     break;
                 case EventCommandNames.FrameSelectedWithLock:
-                    if (execute)
+                    if (execute && Tools.s_ButtonDown != 1)
+                    {
                         FrameSelected(true);
+                    }
                     Event.current.Use();
                     break;
                 case EventCommandNames.SoftDelete:
@@ -3540,17 +3731,30 @@ namespace UnityEditor
                     break;
                 case EventCommandNames.Duplicate:
                     if (execute)
-                        Unsupported.DuplicateGameObjectsUsingPasteboard();
+                    {
+                        CutCopyPasteUtility.DuplicateGO(customParentForNewGameObjects);
+                    }
                     Event.current.Use();
                     break;
                 case EventCommandNames.Copy:
                     if (execute)
-                        Unsupported.CopyGameObjectsToPasteboard();
+                    {
+                        CutCopyPasteUtility.CopyGO();
+                    }
+                    Event.current.Use();
+                    break;
+                case EventCommandNames.Cut:
+                    if (execute)
+                    {
+                        CutCopyPasteUtility.CutGO();
+                    }
                     Event.current.Use();
                     break;
                 case EventCommandNames.Paste:
                     if (execute)
-                        Unsupported.PasteGameObjectsFromPasteboard();
+                    {
+                        CutCopyPasteUtility.PasteGO(customParentForNewGameObjects);
+                    }
                     Event.current.Use();
                     break;
                 case EventCommandNames.SelectAll:
@@ -3596,6 +3800,12 @@ namespace UnityEditor
                     }
                     Event.current.Use();
                     break;
+            }
+            // Detect if we are canceling 'Cut' operation
+            if (Event.current.keyCode == KeyCode.Escape && CutBoard.hasCutboardData)
+            {
+                CutCopyPasteUtility.ResetCutboardAndRepaintHierarchyWindows();
+                Repaint();
             }
         }
 
@@ -3670,7 +3880,15 @@ namespace UnityEditor
             viewIsLockedToObject = lockView;
             FixNegativeSize();
 
-            Bounds bounds = InternalEditorUtility.CalculateSelectionBounds(false, Tools.pivotMode == PivotMode.Pivot, true);
+            Bounds bounds;
+            if (!m_WasFocused)
+            {
+                bounds = InternalEditorUtility.CalculateSelectionBounds(false, Tools.pivotMode == PivotMode.Pivot, true);
+            }
+            else
+            {
+                bounds = new Bounds(Tools.handlePosition, Vector3.one);
+            }
 
             // Check active editor for OnGetFrameBounds
             foreach (Editor editor in activeEditors)
@@ -3694,21 +3912,23 @@ namespace UnityEditor
                 }
             }
 
+            m_WasFocused = !m_WasFocused;
             return Frame(bounds, EditorApplication.isPlaying || instant);
         }
 
         public bool Frame(Bounds bounds, bool instant = true)
         {
-            float newSize = bounds.extents.magnitude * 1.5f;
+            float newSize = bounds.extents.magnitude;
 
             if (float.IsInfinity(newSize))
                 return false;
 
+            // If we have no size to focus on, bound default 10 units
             if (newSize < Mathf.Epsilon)
                 newSize = 10;
 
             // We snap instantly into target on playmode, because things might be moving fast and lerping lags behind
-            LookAt(bounds.center, m_Rotation.target, newSize * 2.2f, m_Ortho.value, instant);
+            LookAt(bounds.center, m_Rotation.target, newSize, m_Ortho.value, instant);
 
             return true;
         }
@@ -3768,26 +3988,40 @@ namespace UnityEditor
 
                 if (method != null)
                 {
-                    using (new EditorPerformanceTracker($"Editor.{editor.GetType().Name}.OnSceneGUI"))
+                    MethodInfo methodEnabled = editor.GetType().GetMethod(
+                        "IsSceneGUIEnabled",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy,
+                        null,
+                        Type.EmptyTypes,
+                        null);
+
+                    bool enabled = (methodEnabled != null) ? (bool)methodEnabled.Invoke(null, null) : true;
+                    if (enabled)
                     {
-                        Editor.m_AllowMultiObjectAccess = true;
-                        for (int n = 0; n < editor.targets.Length; n++)
+                        using (new EditorPerformanceTracker($"Editor.{editor.GetType().Name}.OnSceneGUI"))
                         {
-                            ResetOnSceneGUIState();
-                            editor.referenceTargetIndex = n;
-
-                            EditorGUI.BeginChangeCheck();
-                            // Ironically, only allow multi object access inside OnSceneGUI if editor does NOT support multi-object editing.
-                            // since there's no harm in going through the serializedObject there if there's always only one target.
-                            Editor.m_AllowMultiObjectAccess = !editor.canEditMultipleObjects;
-                            method.Invoke(editor, null);
                             Editor.m_AllowMultiObjectAccess = true;
-                            if (EditorGUI.EndChangeCheck())
-                                editor.serializedObject.SetIsDifferentCacheDirty();
-                        }
+                            for (int n = 0; n < editor.targets.Length; n++)
+                            {
+                                ResetOnSceneGUIState();
+                                editor.referenceTargetIndex = n;
 
-                        ResetOnSceneGUIState();
+                                EditorGUI.BeginChangeCheck();
+                                // Ironically, only allow multi object access inside OnSceneGUI if editor does NOT support multi-object editing.
+                                // since there's no harm in going through the serializedObject there if there's always only one target.
+                                Editor.m_AllowMultiObjectAccess = !editor.canEditMultipleObjects;
+                                method.Invoke(editor, null);
+                                Editor.m_AllowMultiObjectAccess = true;
+                                if (EditorGUI.EndChangeCheck())
+                                    editor.serializedObject.SetIsDifferentCacheDirty();
+                            }
+
+                            ResetOnSceneGUIState();
+                        }
                     }
+                    // This would mean that OnSceneGUI has changed the scene and it is not drawn
+                    if (s_CurrentDrawingSceneView == null)
+                        GUIUtility.ExitGUI();
                 }
             }
 

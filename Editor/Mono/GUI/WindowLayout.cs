@@ -509,6 +509,9 @@ namespace UnityEditor
             Menu.AddMenuItem("Window/Layouts/Save Layout...", "", false, layoutMenuItemPriority++, SaveGUI, null);
             Menu.AddMenuItem("Window/Layouts/Delete Layout...", "", false, layoutMenuItemPriority++, DeleteGUI, null);
             Menu.AddMenuItem("Window/Layouts/Revert Factory Settings...", "", false, layoutMenuItemPriority++, () => RevertFactorySettings(false), null);
+
+            Menu.AddMenuItem("Window/Layouts/More/Save to disk...", "", false, 998, () => SaveToFile(), null);
+            Menu.AddMenuItem("Window/Layouts/More/Load from disk...", "", false, 999, () => LoadFromFile(), null);
         }
 
         internal static EditorWindow FindEditorWindowOfType(Type type)
@@ -945,6 +948,8 @@ namespace UnityEditor
             win.m_Parent.MakeVistaDWMHappyDance();
 
             ContainerWindow.SetFreezeDisplay(false);
+
+            win.OnMaximized();
         }
 
         public static bool LoadWindowLayout(string path, bool newProjectLayoutWasCreated)
@@ -954,6 +959,9 @@ namespace UnityEditor
 
         public static bool LoadWindowLayout(string path, bool newProjectLayoutWasCreated, bool setLastLoadedLayoutName, bool keepMainWindow)
         {
+            Console.WriteLine($"[LAYOUT] About to load {path}, keepMainWindow={keepMainWindow}");
+
+            bool mainWindowMaximized = false;
             Rect mainWindowPosition = new Rect();
             UnityObject[] containers = Resources.FindObjectsOfTypeAll(typeof(ContainerWindow));
             foreach (ContainerWindow window in containers)
@@ -961,6 +969,7 @@ namespace UnityEditor
                 if (window.showMode == ShowMode.MainWindow)
                 {
                     mainWindowPosition = window.position;
+                    mainWindowMaximized = window.maximized;
                 }
             }
 
@@ -1097,6 +1106,12 @@ namespace UnityEditor
                 }
 
                 mainWindow.Show(mainWindow.showMode, loadPosition: true, displayImmediately: true, setFocus: true);
+                if (mainWindow.maximized != mainWindowMaximized)
+                    mainWindow.ToggleMaximize();
+
+                // Make sure to restore the save to layout flag when loading a layout from a file.
+                if (keepMainWindow)
+                    mainWindow.m_DontSaveToLayout = false;
 
                 // Show other windows
                 for (int i = 0; i < newWindows.Count; i++)
@@ -1234,10 +1249,15 @@ namespace UnityEditor
                 foreach (View killme in oldViews)
                     UnityObject.DestroyImmediate(killme, true);
             }
+
+            UnityObject[] toolbars = Resources.FindObjectsOfTypeAll(typeof(EditorToolbar));
+            foreach (var killme in toolbars)
+                UnityObject.DestroyImmediate(killme, true);
         }
 
         public static void SaveWindowLayout(string path)
         {
+            Console.WriteLine($"[LAYOUT] About to save layout {path}");
             TooltipView.Close();
 
             ArrayList all = new ArrayList();
@@ -1305,6 +1325,26 @@ namespace UnityEditor
             UnityEditor.SaveWindowLayout.Show(FindMainView().screenPosition);
         }
 
+        public static void LoadFromFile()
+        {
+            var layoutFilePath = EditorUtility.OpenFilePanelWithFilters("Load layout from disk...", "", new[] {"Layout", "wlt"});
+            if (String.IsNullOrEmpty(layoutFilePath))
+                return;
+
+            if (LoadWindowLayout(layoutFilePath, false))
+                Debug.Log("Loaded layout from " + layoutFilePath);
+        }
+
+        public static void SaveToFile()
+        {
+            var layoutFilePath = EditorUtility.SaveFilePanel("Save layout to disk...", "", "layout", "wlt");
+            if (String.IsNullOrEmpty(layoutFilePath))
+                return;
+
+            SaveWindowLayout(layoutFilePath);
+            Debug.Log("Saved layout to " + layoutFilePath);
+        }
+
         public static void DeleteGUI()
         {
             DeleteWindowLayout.Show(FindMainView().screenPosition);
@@ -1321,11 +1361,12 @@ namespace UnityEditor
                 return;
             }
 
-            ModeService.ChangeModeById("default");
             FileUtil.DeleteFileOrDirectory(layoutsPreferencesPath);
             FileUtil.DeleteFileOrDirectory(ProjectLayoutPath);
+            FileUtil.DeleteFileOrDirectory(GetProjectLayoutPerMode("default"));
+            ModeService.ChangeModeById("default");
 
-            LoadDefaultWindowPreferences();
+            LoadCurrentModeLayout(true);
             ReloadWindowLayoutMenu();
             EditorUtility.Internal_UpdateAllMenus();
             ShortcutIntegration.instance.RebuildShortcuts();

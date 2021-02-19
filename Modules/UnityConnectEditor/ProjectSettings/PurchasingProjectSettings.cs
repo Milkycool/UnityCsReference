@@ -14,7 +14,7 @@ using UnityEngine.UIElements;
 using AsyncOperation = UnityEngine.AsyncOperation;
 using Button = UnityEngine.UIElements.Button;
 
-namespace UnityEditor.Mono.UnityConnect.Services
+namespace UnityEditor.Connect
 {
     /// <summary>
     /// The In App Purchasing section of the CloudServices project settings (actually simply called Services in the ProjectSettings)
@@ -40,6 +40,9 @@ namespace UnityEditor.Mono.UnityConnect.Services
         const string k_KeywordPlatforms = "platforms";
         const string k_KeywordGooglePlay = "Google Play"; //So devs can find where to place their Google Play Public Key
         const string k_KeywordPublicKey = "public key"; //So devs can find where to place their Google Play Public Key
+
+        const string k_GooglePlayKeyBtnUpdateLabel = "Update";
+        const string k_GooglePlayKeyBtnVerifyLabel = "Verify";
 
         const string k_PurchasingPermissionMessage = "You do not have sufficient permissions to enable / disable Purchasing service.";
         const string k_PurchasingPackageName = "In-App Purchasing Package";
@@ -152,7 +155,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
             {
                 var clickable = new Clickable(() =>
                 {
-                    OpenDashboardForProjectGuid(ServicesConfiguration.instance.basePurchasingDashboardUrl);
+                    ServicesConfiguration.instance.RequestBasePurchasingDashboardUrl(OpenDashboardForProjectGuid);
                 });
                 m_GoToDashboard.AddManipulator(clickable);
             }
@@ -166,13 +169,8 @@ namespace UnityEditor.Mono.UnityConnect.Services
         void SetupServiceToggle(SingleService singleService)
         {
             m_MainServiceToggle.SetProperty(k_ServiceNameProperty, singleService.name);
-            m_MainServiceToggle.SetValueWithoutNotify(singleService.IsServiceEnabled());
-            SetupServiceToggleLabel(m_MainServiceToggle, singleService.IsServiceEnabled());
             m_MainServiceToggle.SetEnabled(false);
-            if (m_GoToDashboard != null)
-            {
-                m_GoToDashboard.style.display = (singleService.IsServiceEnabled()) ? DisplayStyle.Flex : DisplayStyle.None;
-            }
+            UpdateServiceToggleAndDashboardLink(singleService.IsServiceEnabled());
 
             if (singleService.displayToggle)
             {
@@ -180,21 +178,29 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 {
                     if (currentUserPermission != UserRole.Owner && currentUserPermission != UserRole.Manager)
                     {
-                        m_MainServiceToggle.SetValueWithoutNotify(evt.previousValue);
-                        SetupServiceToggleLabel(m_MainServiceToggle, evt.previousValue);
+                        UpdateServiceToggleAndDashboardLink(evt.previousValue);
                         return;
                     }
-                    SetupServiceToggleLabel(m_MainServiceToggle, evt.newValue);
                     singleService.EnableService(evt.newValue);
-                    if (m_GoToDashboard != null)
-                    {
-                        m_GoToDashboard.style.display = (evt.newValue) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
                 });
             }
             else
             {
                 m_MainServiceToggle.style.display = DisplayStyle.None;
+            }
+        }
+
+        void UpdateServiceToggleAndDashboardLink(bool isEnabled)
+        {
+            if (m_GoToDashboard != null)
+            {
+                m_GoToDashboard.style.display = (isEnabled) ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            if (m_MainServiceToggle != null)
+            {
+                m_MainServiceToggle.SetValueWithoutNotify(isEnabled);
+                SetupServiceToggleLabel(m_MainServiceToggle, isEnabled);
             }
         }
 
@@ -313,6 +319,8 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 var scrollContainer = provider.rootVisualElement.Q(className: k_ScrollContainerClass);
                 scrollContainer.Add(ServicesUtils.SetupSupportedPlatformsBlock(GetSupportedPlatforms()));
 
+                provider.UpdateServiceToggleAndDashboardLink(provider.serviceInstance.IsServiceEnabled());
+
                 provider.HandlePermissionRestrictedControls();
             }
 
@@ -332,6 +340,8 @@ namespace UnityEditor.Mono.UnityConnect.Services
             const string k_BulletCharacter = "\u2022 ";
 
             VisualElement m_ImportIapBlock;
+            VisualElement m_MigrateIapBlock;
+            Label m_MigratePackageVersionLabel;
             VisualElement m_IapOptionsBlock;
 
             //uss class names
@@ -341,14 +351,17 @@ namespace UnityEditor.Mono.UnityConnect.Services
             //uxml element names
             const string k_WelcomeToIapBlock = "WelcomeToIapBlock";
             const string k_ImportIapBlock = "ImportIapBlock";
+            const string k_MigrateIapBlock = "MigrateIapBlock";
             const string k_IapOptionsBlock = "IapOptionsBlock";
             const string k_ImportBtn = "ImportBtn";
             const string k_ReimportBtn = "ReimportBtn";
             const string k_UpdateBtn = "UpdateBtn";
-            const string k_VerifyBtn = "VerifyBtn";
+            const string k_MigrateBtn = "MigrateBtn";
+            const string k_UpdateGooglePlayKeyBtn = "UpdateGooglePlayKeyBtn";
             const string k_GooglePlayLink = "GooglePlayLink";
             const string k_GooglePlayKeyEntry = "GooglePlayKeyEntry";
             const string k_GoToDashboardLink = "GoToDashboard";
+            const string k_MigrateVersionInfo = "MigrateVersionInfo";
 
             //Package Import status blocks
             const string k_UnimportedMode = "unimported-mode";
@@ -367,9 +380,17 @@ namespace UnityEditor.Mono.UnityConnect.Services
             //WebResponse JSON utils
             const string k_JsonKeyAuthSignature = "auth_signature";
 
+            //Popup Messages
+            const string k_PackageMigrationHeadsup = "You are about to migrate to the more modern {0}. This will modify your project files. Be sure to make a backup first.\nDo you want to continue?";
+
             //Notification Messages
             const string k_AuthSignatureExceptionMessage = "Exception occurred trying to obtain authentication signature for project {0} and was not handled. Message: {1}";
             const string k_KeyParsingExceptionMessage = "Exception occurred trying to parse Google Play Key and was not handled. Message: {0}";
+
+            string packageMigrationHeadsup { get; set; }
+            string m_LatestPreMigrationPackageVersion;
+            bool m_LookForAssetStoreImport;
+            bool m_EligibleForMigration;
 
             bool m_SettingKey;
             string m_GooglePlayKey;
@@ -402,6 +423,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 topicForNotifications = Notification.Topic.PurchasingService;
                 notLatestPackageInstalledInfo = string.Format(k_NotLatestPackageInstalledInfo, k_PurchasingPackageName);
                 packageInstallationHeadsup = string.Format(k_PackageInstallationHeadsup, k_PurchasingPackageName);
+                packageMigrationHeadsup = string.Format(k_PackageMigrationHeadsup, k_PurchasingPackageName);
                 duplicateInstallWarning = null;
                 packageInstallationDialogTitle = string.Format(k_PackageInstallationDialogTitle, k_PurchasingPackageName);
 
@@ -413,17 +435,23 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 LoadTemplateIntoScrollContainer(k_TemplatePath);
 
                 m_ImportIapBlock = provider.rootVisualElement.Q(k_ImportIapBlock);
+                m_MigrateIapBlock = provider.rootVisualElement.Q(k_MigrateIapBlock);
                 m_IapOptionsBlock = provider.rootVisualElement.Q(k_IapOptionsBlock);
 
                 SetupWelcomeIapBlock();
                 SetupImportIapBlock();
+                SetupMigrateIapBlock();
                 SetupIapOptionsBlock();
                 var scrollContainer = provider.rootVisualElement.Q(className: k_ScrollContainerClass);
                 scrollContainer.Add(ServicesUtils.SetupSupportedPlatformsBlock(GetSupportedPlatforms()));
+
+                provider.UpdateServiceToggleAndDashboardLink(provider.serviceInstance.IsServiceEnabled());
+
                 provider.HandlePermissionRestrictedControls();
 
                 // Prepare the package section and update the package information
                 PreparePackageSection(provider.rootVisualElement);
+                m_LatestPreMigrationPackageVersion = string.Empty;
                 UpdatePackageInformation();
             }
 
@@ -472,6 +500,21 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 PurchasingService.instance.GetLatestETag(PurchasingService.instance.OnGetLatestETag);
             }
 
+            //Begin Migrate Block
+            void SetupMigrateIapBlock()
+            {
+                m_MigrateIapBlock.Q<Button>(k_MigrateBtn).clicked += InstallMigratePackage;
+
+                m_MigratePackageVersionLabel = m_MigrateIapBlock.Q<Label>(k_MigrateVersionInfo);
+                // Make sure version texts are upper case...
+                if (m_MigratePackageVersionLabel != null)
+                {
+                    m_MigratePackageVersionLabel.text = m_MigratePackageVersionLabel.text.ToUpper();
+                }
+
+                ToggleMigrateModeVisibility(m_MigrateIapBlock, m_EligibleForMigration);
+            }
+
             void VerifyImportTag()
             {
                 string importTag = PurchasingService.instance.GetInstalledETag();
@@ -494,7 +537,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
                     importState = ImportState.OutOfDate;
                 }
 
-                ToggleImportModeVisibility(m_ImportIapBlock, importState);
+                ToggleImportModeVisibility(m_ImportIapBlock, importState, m_LookForAssetStoreImport);
 
                 if (importState == ImportState.VersionCheck)
                 {
@@ -502,39 +545,151 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 }
             }
 
-            void ToggleImportModeVisibility(VisualElement fieldBlock, ImportState importState)
+            void ToggleImportModeVisibility(VisualElement fieldBlock, ImportState importState, bool canImport)
             {
                 if (fieldBlock != null)
                 {
-                    var unimportedMode = fieldBlock.Q(k_UnimportedMode);
-                    if (unimportedMode != null)
+                    if (canImport)
                     {
-                        unimportedMode.style.display = (importState == ImportState.Unimported) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
+                        fieldBlock.style.display = DisplayStyle.Flex;
 
-                    var versionCheckMode = fieldBlock.Q(k_VersionCheckMode);
-                    if (versionCheckMode != null)
-                    {
-                        versionCheckMode.style.display = (importState == ImportState.VersionCheck) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
+                        var unimportedMode = fieldBlock.Q(k_UnimportedMode);
+                        if (unimportedMode != null)
+                        {
+                            unimportedMode.style.display = (importState == ImportState.Unimported)
+                                ? DisplayStyle.Flex
+                                : DisplayStyle.None;
+                        }
 
-                    var upToDateMode = fieldBlock.Q(k_UpToDataMode);
-                    if (upToDateMode != null)
-                    {
-                        upToDateMode.style.display = (importState == ImportState.UpToDate) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
+                        var versionCheckMode = fieldBlock.Q(k_VersionCheckMode);
+                        if (versionCheckMode != null)
+                        {
+                            versionCheckMode.style.display = (importState == ImportState.VersionCheck)
+                                ? DisplayStyle.Flex
+                                : DisplayStyle.None;
+                        }
 
-                    var outOfDateMode = fieldBlock.Q(k_OutOfDateMode);
-                    if (outOfDateMode != null)
+                        var upToDateMode = fieldBlock.Q(k_UpToDataMode);
+                        if (upToDateMode != null)
+                        {
+                            upToDateMode.style.display = (importState == ImportState.UpToDate)
+                                ? DisplayStyle.Flex
+                                : DisplayStyle.None;
+                        }
+
+                        var outOfDateMode = fieldBlock.Q(k_OutOfDateMode);
+                        if (outOfDateMode != null)
+                        {
+                            outOfDateMode.style.display = (importState == ImportState.OutOfDate)
+                                ? DisplayStyle.Flex
+                                : DisplayStyle.None;
+                        }
+                    }
+                    else
                     {
-                        outOfDateMode.style.display = (importState == ImportState.OutOfDate) ? DisplayStyle.Flex : DisplayStyle.None;
+                        fieldBlock.style.display = DisplayStyle.None;
                     }
                 }
+            }
+
+            void ToggleMigrateModeVisibility(VisualElement fieldBlock, bool canMigrate)
+            {
+                if (fieldBlock != null)
+                {
+                    fieldBlock.style.display = canMigrate ? DisplayStyle.Flex : DisplayStyle.None;
+                }
+            }
+
+            protected override string GetUpdatablePackageVersion()
+            {
+                if (string.IsNullOrEmpty(m_LatestPreMigrationPackageVersion))
+                {
+                    return base.GetUpdatablePackageVersion();
+                }
+                else
+                {
+                    return m_LatestPreMigrationPackageVersion;
+                }
+            }
+
+            protected override void OnSearchPackageFound(PackageManager.PackageInfo package)
+            {
+                base.OnSearchPackageFound(package);
+
+                m_EligibleForMigration = false;
+                m_LatestPreMigrationPackageVersion = string.Empty;
+                if (TryGetMajorVersion(currentPackageVersion, out var currentMajorVer))
+                {
+                    if (currentMajorVer <= 2)
+                    {
+                        foreach (var version in package.versions.compatible.Reverse())
+                        {
+                            if (!IsPreviewVersion(version))
+                            {
+                                if (TryGetMajorVersion(version, out var majorVer))
+                                {
+                                    if (majorVer <= 2)
+                                    {
+                                        if (string.IsNullOrEmpty(m_LatestPreMigrationPackageVersion))
+                                        {
+                                            m_LatestPreMigrationPackageVersion = version;
+                                            break; //Should be the last version we need to test for, given Reverse order. Move if algorithm changes.
+                                        }
+                                    }
+                                    else if (majorVer >= 3)
+                                    {
+                                        if (!m_EligibleForMigration)
+                                        {
+                                            m_EligibleForMigration = true;
+
+                                            m_MigratePackageVersionLabel.text = latestPackageVersion;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            protected override void PackageInformationUpdated()
+            {
+                m_LookForAssetStoreImport = false;
+
+                if (packmanPackageInstalled && TryGetMajorVersion(currentPackageVersion, out var currentMajorVer))
+                {
+                    if (currentMajorVer <= 2)
+                    {
+                        m_LookForAssetStoreImport = true;
+                    }
+                }
+
+                VerifyImportTag();
+                ToggleMigrateModeVisibility(m_MigrateIapBlock, m_EligibleForMigration);
+            }
+
+            bool TryGetMajorVersion(string versionName, out int majorVersion)
+            {
+                return int.TryParse(versionName.Split('.')[0], out majorVersion);
+            }
+
+            bool IsPreviewVersion(string versionName)
+            {
+                var previewTag = "preview"; //TODO: update to an array if more nomenclature exists.
+                return versionName.Contains(previewTag);
             }
 
             void RequestImportOperation()
             {
                 PurchasingService.instance.InstallUnityPackage(OnImportComplete);
+            }
+
+            void InstallMigratePackage()
+            {
+                var messageForDialog = L10n.Tr(packageMigrationHeadsup);
+                installPackageVersion = latestPackageVersion;
+
+                InstallPackage(messageForDialog);
             }
 
             void OnImportComplete()
@@ -554,7 +709,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
             {
                 RequestRetrieveOperation();
 
-                m_IapOptionsBlock.Q<Button>(k_VerifyBtn).clicked += RequestVerifyOperation;
+                m_IapOptionsBlock.Q<Button>(k_UpdateGooglePlayKeyBtn).clicked += RequestUpdateOperation;
 
                 m_IapOptionsBlock.Q<Button>(k_GooglePlayLink).clicked += () =>
                 {
@@ -562,14 +717,30 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 };
             }
 
-            static void ToggleGoogleKeyStateVisibility(VisualElement fieldBlock, GooglePlayKeyState importState)
+            void ToggleGoogleKeyStateVisibility(VisualElement fieldBlock, GooglePlayKeyState importState)
             {
                 if (fieldBlock != null)
                 {
                     var verifiedMode = fieldBlock.Q(k_VerifiedMode);
                     if (verifiedMode != null)
                     {
-                        verifiedMode.style.display = (importState == GooglePlayKeyState.Verified) ? DisplayStyle.Flex : DisplayStyle.None;
+                        var updateGooglePlayKeyBtn = m_IapOptionsBlock.Q<Button>(k_UpdateGooglePlayKeyBtn);
+                        if (importState == GooglePlayKeyState.Verified)
+                        {
+                            if (updateGooglePlayKeyBtn != null)
+                            {
+                                updateGooglePlayKeyBtn.text = L10n.Tr(k_GooglePlayKeyBtnUpdateLabel);
+                            }
+                            verifiedMode.style.display = DisplayStyle.Flex;
+                        }
+                        else
+                        {
+                            if (updateGooglePlayKeyBtn != null)
+                            {
+                                updateGooglePlayKeyBtn.text = L10n.Tr(k_GooglePlayKeyBtnVerifyLabel);
+                            }
+                            verifiedMode.style.display = DisplayStyle.None;
+                        }
                     }
 
                     var unVerifiedMode = fieldBlock.Q(k_UnverifiedMode);
@@ -627,7 +798,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 }
             }
 
-            void RequestVerifyOperation()
+            void RequestUpdateOperation()
             {
                 m_SettingKey = true;
                 if (m_ProjectAuthSignature == null)

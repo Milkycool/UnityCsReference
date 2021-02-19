@@ -21,12 +21,11 @@ namespace UnityEditor.PackageManager.UI
             IUxmlFactory[] factories =
             {
                 new Alert.UxmlFactory(),
-                new ArrowToggle.UxmlFactory(),
                 new DropdownButton.UxmlFactory(),
                 new LoadingSpinner.UxmlFactory(),
                 new PackageDependencies.UxmlFactory(),
                 new PackageDetails.UxmlFactory(),
-                new PackageItem.UxmlFactory(),
+                new PackageTagLabel.UxmlFactory(),
                 new PackageList.UxmlFactory(),
                 new PackageLoadBar.UxmlFactory(),
                 new PackageManagerToolbar.UxmlFactory(),
@@ -34,7 +33,6 @@ namespace UnityEditor.PackageManager.UI
                 new PackageStatusBar.UxmlFactory(),
                 new PackageToolbar.UxmlFactory(),
                 new ProgressBar.UxmlFactory(),
-                new SplitView.UxmlFactory(),
                 new ToolbarWindowMenu.UxmlFactory()
             };
 

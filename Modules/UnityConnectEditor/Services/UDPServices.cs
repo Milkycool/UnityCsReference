@@ -14,9 +14,10 @@ namespace UnityEditor.Connect
         public override string description { get; }
         public override string pathTowardIcon { get; }
         public override string projectSettingsPath { get; }
+        public override string settingsProviderClassName => "AppStoreProjectSettingsEditor";
         public override bool displayToggle { get; }
         public override bool isPackage { get; }
-        public override string packageId { get; }
+        public override string packageName { get; }
         public override Notification.Topic notificationTopic => Notification.Topic.UDPService;
         static readonly UDPService k_Instance;
         public static UDPService instance => k_Instance;
@@ -34,8 +35,10 @@ namespace UnityEditor.Connect
             projectSettingsPath = "Project/Services/Unity Distribution Portal";
             displayToggle = false;
             isPackage = true;
-            packageId = "com.unity.purchasing.udp";
-            ServicesRepository.AddService(this);
+            packageName = "com.unity.purchasing.udp";
+            // Due to really bad user experience, this service cannot be included in the services window.
+            // See fogbugz case 1215216, with this entry removed the user experience is not worst then on previous Unity Version
+            // ServicesRepository.AddService(this);
         }
     }
 }

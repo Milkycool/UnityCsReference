@@ -373,6 +373,11 @@ namespace UnityEngine
         ASTC_HDR_10x10 = 70,
         ASTC_HDR_12x12 = 71,
 
+        // 16-bit raw integer formats
+        RG32 = 72,
+        RGB48 = 73,
+        RGBA64 = 74,
+
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         [System.Obsolete("Enum member TextureFormat.ASTC_RGB_4x4 has been deprecated. Use ASTC_4x4 instead (UnityUpgradable) -> ASTC_4x4")]
         ASTC_RGB_4x4 = 48,
@@ -716,7 +721,14 @@ namespace UnityEngine
                 RGBA_ASTC10X10_SRGB = 137,
                 RGBA_ASTC10X10_UNorm = 138,
                 RGBA_ASTC12X12_SRGB = 139,
-                RGBA_ASTC12X12_UNorm = 140
+                RGBA_ASTC12X12_UNorm = 140,
+
+                RGBA_ASTC4X4_UFloat = 145,
+                RGBA_ASTC5X5_UFloat = 146,
+                RGBA_ASTC6X6_UFloat = 147,
+                RGBA_ASTC8X8_UFloat = 148,
+                RGBA_ASTC10X10_UFloat = 149,
+                RGBA_ASTC12X12_UFloat = 150,
             }
             // Match RayTracingMode on C++ side
             public enum RayTracingMode
@@ -792,6 +804,12 @@ namespace UnityEngine
         {
             Low = 0,
             Normal = 1,
+        }
+
+        public enum DataFormat
+        {
+            HalfFloat = 0,
+            Float = 1,
         }
     }
 
@@ -1543,6 +1561,16 @@ namespace UnityEngine.Rendering
         #pragma warning restore 0414
     }
 
+    // Keep in sync with C++ FormatSwizzle in Runtime/Graphics/Format.h
+    [Flags]
+    public enum RenderTargetFlags
+    {
+        None = 0,
+        ReadOnlyDepth = 1 << 0,
+        ReadOnlyStencil = 1 << 1,
+        ReadOnlyDepthStencil = ReadOnlyDepth | ReadOnlyStencil,
+    }
+
     public struct RenderTargetBinding
     {
         RenderTargetIdentifier[] m_ColorRenderTargets;
@@ -1554,12 +1582,15 @@ namespace UnityEngine.Rendering
         RenderBufferLoadAction m_DepthLoadAction;
         RenderBufferStoreAction m_DepthStoreAction;
 
+        RenderTargetFlags m_Flags;
+
         public RenderTargetIdentifier[] colorRenderTargets { get { return m_ColorRenderTargets; } set { m_ColorRenderTargets = value; } }
         public RenderTargetIdentifier depthRenderTarget { get { return m_DepthRenderTarget; } set { m_DepthRenderTarget = value; } }
         public RenderBufferLoadAction[] colorLoadActions { get { return m_ColorLoadActions; } set { m_ColorLoadActions = value; } }
         public RenderBufferStoreAction[] colorStoreActions { get { return m_ColorStoreActions; } set { m_ColorStoreActions = value; } }
         public RenderBufferLoadAction depthLoadAction { get { return m_DepthLoadAction; } set { m_DepthLoadAction = value; } }
         public RenderBufferStoreAction depthStoreAction { get { return m_DepthStoreAction; } set { m_DepthStoreAction = value; } }
+        public RenderTargetFlags flags { get { return m_Flags; } set { m_Flags = value; } }
 
         public RenderTargetBinding(RenderTargetIdentifier[] colorRenderTargets, RenderBufferLoadAction[] colorLoadActions, RenderBufferStoreAction[] colorStoreActions,
                                    RenderTargetIdentifier depthRenderTarget, RenderBufferLoadAction depthLoadAction, RenderBufferStoreAction depthStoreAction)
@@ -1572,6 +1603,8 @@ namespace UnityEngine.Rendering
 
             m_DepthLoadAction = depthLoadAction;
             m_DepthStoreAction = depthStoreAction;
+
+            m_Flags = RenderTargetFlags.None;
         }
 
         public RenderTargetBinding(RenderTargetIdentifier colorRenderTarget, RenderBufferLoadAction colorLoadAction, RenderBufferStoreAction colorStoreAction,
@@ -1593,6 +1626,8 @@ namespace UnityEngine.Rendering
 
             m_DepthLoadAction = setup.depthLoad;
             m_DepthStoreAction = setup.depthStore;
+
+            m_Flags = RenderTargetFlags.None;
         }
     }
 

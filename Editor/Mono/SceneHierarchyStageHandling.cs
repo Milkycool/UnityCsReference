@@ -2,6 +2,7 @@
 // Copyright (c) Unity Technologies. For terms of use, see
 // https://unity3d.com/legal/licenses/Unity_Reference_Only_License
 
+using UnityEditor.Experimental.SceneManagement;
 using UnityEngine;
 using UnityEditor.IMGUI.Controls;
 using UnityEditor.SceneManagement;
@@ -54,6 +55,10 @@ namespace UnityEditor
 
         void OnBeforeSwitchingAwayFromStage(Stage stage)
         {
+            // Clear parent object for the prefab stage if one was set
+            if (stage is PrefabStage)
+                SceneHierarchy.SetDefaultParentForSession(stage.GetSceneAt(stage.sceneCount - 1).guid, 0);
+
             stage.SaveHierarchyState(m_SceneHierarchyWindow);
         }
 
@@ -138,14 +143,14 @@ namespace UnityEditor
             EditorGUIUtility.SetIconSize(Vector2.zero);
 
             // Version control overlay icons
-            if (VersionControl.Provider.isActive)
+            if (VersionControl.Provider.isActive && EditorUserSettings.hierarchyOverlayIcons)
             {
                 Rect overlayRect = labelRect;
                 overlayRect.width = 16;
                 overlayRect.y += (overlayRect.height - 16) / 2;
                 overlayRect.height = 16;
 
-                // The source asset can have been deleted while open in stage so the library object can be null here (case 1086613)
+                // The source asset could have been deleted while open inside the stage so the library object might be null here (case 1086613)
                 var asset = AssetDatabase.LoadMainAssetAtPath(stage.assetPath);
                 if (asset != null)
                     AssetsTreeViewGUI.OnIconOverlayGUI(asset.GetInstanceID(), overlayRect, true);

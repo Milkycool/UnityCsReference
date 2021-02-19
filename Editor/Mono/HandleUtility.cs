@@ -4,12 +4,15 @@
 
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Internal;
 using UnityEngine.Rendering;
-using UnityEngine.SceneManagement;
 using UnityEngine.Scripting;
+using UnityEditor.SceneManagement;
+using UnityEditor.Experimental.SceneManagement;
 
 namespace UnityEditor
 {
@@ -62,6 +65,44 @@ namespace UnityEditor
         internal static float GetParametrization(Vector2 x0, Vector2 x1, Vector2 x2)
         {
             return -(Vector2.Dot(x1 - x0, x2 - x1) / (x2 - x1).sqrMagnitude);
+        }
+
+        // This limits the "shoot off into infinity" factor when the cursor ray and constraint are near parallel.
+        // Increase this value to more conservatively restrict movement, lower to allow more extreme values.
+        // Ex, with a camera roughly 30 degrees to the handle a value of .1 restricts translation to ~1500m, whereas a
+        // value of .01 will allow closer to 50000 units of movement.
+        const float k_MinRayConstraintDot = .05f;
+
+        // constraintOrigin and constraintDir are expected to be in Handle space (ie, origin and direction are
+        // pre-multiplied by the Handles.matrix)
+        internal static bool CalcPositionOnConstraint(Camera camera, Vector2 guiPosition, Vector3 constraintOrigin, Vector3 constraintDir, out Vector3 position)
+        {
+            if (CalcParamOnConstraint(camera, guiPosition, constraintOrigin, constraintDir, out float pointOnLineParam))
+            {
+                position = constraintOrigin + constraintDir * pointOnLineParam;
+                return true;
+            }
+
+            position = Vector3.zero;
+            return false;
+        }
+
+        internal static bool CalcParamOnConstraint(Camera camera, Vector2 guiPosition, Vector3 constraintOrigin, Vector3 constraintDir, out float parameterization)
+        {
+            Vector3 constraintToCameraTangent = Vector3.Cross(constraintDir, camera.transform.position - constraintOrigin);
+            Vector3 constraintPlaneNormal = Vector3.Cross(constraintDir, constraintToCameraTangent);
+            Plane plane = new Plane(constraintPlaneNormal, constraintOrigin);
+            var ray = GUIPointToWorldRay(guiPosition);
+
+            if (Vector3.Dot(ray.direction, plane.normal) > k_MinRayConstraintDot && plane.Raycast(ray, out float distance))
+            {
+                var pointOnPlane = ray.GetPoint(distance);
+                parameterization = PointOnLineParameter(pointOnPlane, constraintOrigin, constraintDir);
+                return !float.IsInfinity(parameterization);
+            }
+
+            parameterization = 0f;
+            return false;
         }
 
         // Returns the parameter for the projection of the /point/ on the given line
@@ -157,6 +198,56 @@ namespace UnityEditor
             if (dist < radius)
                 return 0;
             return dist - radius;
+        }
+
+        // Pixel distance from mouse pointer to cone projection on screen
+        static ProfilerMarker s_DistanceToConeMarker = new ProfilerMarker("Handles.DistanceToCone");
+        static readonly Vector3[] s_DistanceToConePoints = new Vector3[7];
+        public static float DistanceToCone(Vector3 position, Quaternion rotation, float size)
+        {
+            using (s_DistanceToConeMarker.Auto())
+            {
+                // our handles cone mesh is along Z axis:
+                // base at Z=-0.5 with radius 0.4, and apex at Z=0.7
+                var baseZ = -0.5f * size;
+                var apexZ = 0.7f * size;
+                var baseR = 0.4f * size;
+
+                // approximate the cone with a six-sided base
+                var baseR60x = baseR * 0.5f; // cos 60
+                var baseR60y = baseR * 0.866f; // sin 60
+                var mat = Matrix4x4.TRS(position, rotation, Vector3.one);
+                s_DistanceToConePoints[0] = mat.MultiplyPoint(new Vector3(0, 0, apexZ));
+                s_DistanceToConePoints[1] = mat.MultiplyPoint(new Vector3(+baseR, 0, baseZ));
+                s_DistanceToConePoints[2] = mat.MultiplyPoint(new Vector3(-baseR, 0, baseZ));
+                s_DistanceToConePoints[3] = mat.MultiplyPoint(new Vector3(+baseR60x, +baseR60y, baseZ));
+                s_DistanceToConePoints[4] = mat.MultiplyPoint(new Vector3(-baseR60x, +baseR60y, baseZ));
+                s_DistanceToConePoints[5] = mat.MultiplyPoint(new Vector3(+baseR60x, -baseR60y, baseZ));
+                s_DistanceToConePoints[6] = mat.MultiplyPoint(new Vector3(-baseR60x, -baseR60y, baseZ));
+
+                return DistanceToPointCloudConvexHull(s_DistanceToConePoints);
+            }
+        }
+
+        // Pixel distance from mouse pointer to cube projection on screen
+        static ProfilerMarker s_DistanceToCubeMarker = new ProfilerMarker("Handles.DistanceToCube");
+        static readonly Vector3[] s_DistanceToCubePoints = new Vector3[8];
+        public static float DistanceToCube(Vector3 position, Quaternion rotation, float size)
+        {
+            using (s_DistanceToCubeMarker.Auto())
+            {
+                var s = size * 0.5f;
+                var mat = Matrix4x4.TRS(position, rotation, Vector3.one);
+                s_DistanceToCubePoints[0] = mat.MultiplyPoint(new Vector3(+s, +s, +s));
+                s_DistanceToCubePoints[1] = mat.MultiplyPoint(new Vector3(-s, +s, +s));
+                s_DistanceToCubePoints[2] = mat.MultiplyPoint(new Vector3(+s, -s, +s));
+                s_DistanceToCubePoints[3] = mat.MultiplyPoint(new Vector3(-s, -s, +s));
+                s_DistanceToCubePoints[4] = mat.MultiplyPoint(new Vector3(+s, +s, -s));
+                s_DistanceToCubePoints[5] = mat.MultiplyPoint(new Vector3(-s, +s, -s));
+                s_DistanceToCubePoints[6] = mat.MultiplyPoint(new Vector3(+s, -s, -s));
+                s_DistanceToCubePoints[7] = mat.MultiplyPoint(new Vector3(-s, -s, -s));
+                return DistanceToPointCloudConvexHull(s_DistanceToCubePoints);
+            }
         }
 
         // Pixel distance from mouse pointer to a rectangle on screen
@@ -334,7 +425,7 @@ namespace UnityEditor
         public static float DistanceToArc(Vector3 center, Vector3 normal, Vector3 from, float angle, float radius)
         {
             Handles.SetDiscSectionPoints(m_ArcPointsBuffer, center, normal, from, angle, radius);
-            return DistanceToPolyLine(m_ArcPointsBuffer);
+            return DistanceToPolyLineOnPlane(m_ArcPointsBuffer, center, normal);
         }
 
         // Get the nearest 3D point.
@@ -363,7 +454,76 @@ namespace UnityEditor
                 if (d < dist)
                     dist = d;
             }
+
             return dist;
+        }
+
+        // Pixel distance from mouse pointer to a polyline.
+        internal static float DistanceToPolyLine(Vector3[] points, bool loop, out int index)
+        {
+            Matrix4x4 handleMatrix = Handles.matrix;
+            CameraProjectionCache cam = new CameraProjectionCache(Camera.current, Screen.height);
+            Vector2 mouse = Event.current.mousePosition;
+
+            Vector2 p1 = cam.WorldToGUIPoint(handleMatrix.MultiplyPoint3x4(points[0]));
+            Vector2 p2 = cam.WorldToGUIPoint(handleMatrix.MultiplyPoint3x4(points[1]));
+            float dist = DistanceToLineInternal(mouse, p1, p2);
+            index = 0;
+
+            for (int i = 2, c = points.Length; i < (loop ? c + 1 : c); i++)
+            {
+                p1 = p2;
+                p2 = cam.WorldToGUIPoint(handleMatrix.MultiplyPoint3x4(points[i % c]));
+                float d = DistanceToLineInternal(mouse, p1, p2);
+                if (d < dist)
+                {
+                    index = i - 1;
+                    dist = d;
+                }
+            }
+
+            return dist;
+        }
+
+        // Pixel distance from mouse pointer to a polyline on a 2D plane.
+        internal static float DistanceToPolyLineOnPlane(Vector3[] points, Vector3 center, Vector3 normal)
+        {
+            Matrix4x4 handleMatrix = Handles.matrix;
+            var worldPosition = handleMatrix.MultiplyPoint3x4(center);
+            var worldNormal = handleMatrix.MultiplyVector(normal);
+            Plane p = new Plane(worldNormal, worldPosition);
+            Vector2 point = Event.current.mousePosition;
+            Ray r = GUIPointToWorldRay(point);
+
+            float enter;
+
+            if (!p.Raycast(r, out enter))
+                return DistanceToPolyLine(points);
+
+            Vector3 intersect = handleMatrix.inverse.MultiplyPoint3x4(r.GetPoint(enter));
+            Vector3 p1 = points[0];
+            Vector3 p2 = points[1];
+
+            float dist = DistanceToLineInternal(intersect, p1, p2);
+            Vector3 s1 = Vector3.zero, s2 = Vector3.zero;
+
+            for (int i = 2; i < points.Length; i++)
+            {
+                p1 = p2;
+                p2 = points[i];
+                float d = DistanceToLineInternal(intersect, p1, p2);
+
+                if (d < dist)
+                {
+                    dist = d;
+                    s1 = p1;
+                    s2 = p2;
+                }
+            }
+
+            return DistanceToLineInternal(point,
+                WorldToGUIPoint(s1),
+                WorldToGUIPoint(s2));
         }
 
         // Get the nearest 3D point.
@@ -393,6 +553,122 @@ namespace UnityEditor
             dot = Mathf.Clamp01(dot);
 
             return Vector3.Lerp(lineStart, lineEnd, dot);
+        }
+
+        static float CalcPointSide(Vector2 l0, Vector2 l1, Vector2 point)
+        {
+            return (l1.y - l0.y) * (point.x - l0.x) - (l1.x - l0.x) * (point.y - l0.y);
+        }
+
+        static float DistancePointToConvexHull(Vector2 p, List<Vector2> hull)
+        {
+            var distance = float.PositiveInfinity;
+            if (hull == null || hull.Count == 0)
+                return distance;
+
+            var inside = hull.Count > 1;
+            var sideSign = 0;
+            for (var i = 0; i < hull.Count; ++i)
+            {
+                // get the line segment
+                var j = i == 0 ? hull.Count - 1 : i - 1;
+                var pt1 = hull[i];
+                var pt2 = hull[j];
+
+                // for point to be inside the hull, "side"
+                // signs must be the same for all edges.
+                var thisSide = CalcPointSide(pt1, pt2, p);
+                var thisSideSign = thisSide >= 0 ? 1 : -1;
+                if (sideSign == 0)
+                    sideSign = thisSideSign;
+                else if (thisSideSign != sideSign)
+                    inside = false;
+
+                // get minimum distance to each segment
+                var thisDistance = DistancePointToLineSegment(p, pt1, pt2);
+                distance = Mathf.Min(distance, thisDistance);
+            }
+            if (inside)
+                distance = 0;
+            return distance;
+        }
+
+        static void RemoveInsidePoints(int countLimit, Vector2 pt, List<Vector2> hull)
+        {
+            while (hull.Count >= countLimit && CalcPointSide(hull[hull.Count - 2], hull[hull.Count - 1], pt) <= 0)
+                hull.RemoveAt(hull.Count - 1);
+        }
+
+        // Note: .z components of input points are ignored; result is a 2D hull on .xy
+        static void CalcConvexHull2D(Vector3[] points, List<Vector2> outHull)
+        {
+            outHull.Clear();
+            if (points == null || points.Length == 0)
+                return;
+            var needCapacity = points.Length + 1;
+            if (outHull.Capacity < needCapacity)
+                outHull.Capacity = needCapacity;
+            if (points.Length == 1)
+            {
+                outHull.Add(points[0]);
+                return;
+            }
+
+            // Andrew's monotone chain algorithm:
+            // First sort the input points
+            Array.Sort(points, (a, b) =>
+            {
+                var ca = a.x.CompareTo(b.x);
+                return ca != 0 ? ca : a.y.CompareTo(b.y);
+            });
+
+            // Build lower hull
+            for (int i = 0; i < points.Length; ++i)
+            {
+                Vector2 pt = points[i];
+                RemoveInsidePoints(2, pt, outHull);
+                outHull.Add(pt);
+            }
+
+            // Build upper hull
+            for (int i = points.Length - 2, j = outHull.Count + 1; i >= 0; --i)
+            {
+                Vector2 pt = points[i];
+                RemoveInsidePoints(j, pt, outHull);
+                outHull.Add(pt);
+            }
+
+            // Remove last point (it's the same as the first one)
+            outHull.RemoveAt(outHull.Count - 1);
+        }
+
+        // Note: modifies input points array
+        static void CalcPointCloudConvexHull(Vector3[] points, List<Vector2> outHull)
+        {
+            outHull.Clear();
+            if (points == null || points.Length == 0)
+                return;
+
+            // project point cloud into 2D GUI space
+            var handleMatrix = Handles.matrix;
+            var cam = new CameraProjectionCache(Camera.current, Screen.height);
+            for (var i = 0; i < points.Length; ++i)
+                points[i] = cam.WorldToGUIPoint(handleMatrix.MultiplyPoint3x4(points[i]));
+
+            // calculate 2D convex hull
+            CalcConvexHull2D(points, outHull);
+        }
+
+        // Note: input array contents are modified
+        static readonly List<Vector2> s_PointCloudConvexHull = new List<Vector2>();
+        static float DistanceToPointCloudConvexHull(params Vector3[] points)
+        {
+            if (points == null || points.Length == 0)
+                return float.PositiveInfinity;
+
+            var mousePos = Event.current.mousePosition;
+            CalcPointCloudConvexHull(points, s_PointCloudConvexHull);
+            return DistancePointToConvexHull(mousePos, s_PointCloudConvexHull);
         }
 
         // Record a distance measurement from a handle.
@@ -515,14 +791,79 @@ namespace UnityEditor
         // Convert 2D GUI position to a world space ray.
         public static Ray GUIPointToWorldRay(Vector2 position)
         {
-            if (!Camera.current)
+            return GUIPointToWorldRayPrecise(position);
+        }
+
+        private static Ray GUIPointToWorldRayPrecise(Vector2 position, float startZ = float.NegativeInfinity)
+        {
+            Camera camera = Camera.current;
+            if (!camera)
             {
                 Debug.LogError("Unable to convert GUI point to world ray if a camera has not been set up!");
                 return new Ray(Vector3.zero, Vector3.forward);
             }
+
+            if (float.IsNegativeInfinity(startZ))
+                startZ = camera.nearClipPlane;
+
             Vector2 screenPixelPos = GUIPointToScreenPixelCoordinate(position);
-            Camera camera = Camera.current;
-            return camera.ScreenPointToRay(screenPixelPos);
+            Rect viewport = camera.pixelRect;
+
+            Matrix4x4 camToWorld = camera.cameraToWorldMatrix;
+            Matrix4x4 camToClip = camera.projectionMatrix;
+            Matrix4x4 clipToCam = camToClip.inverse;
+
+            // calculate ray origin and direction in world space
+            Vector3 rayOriginWorldSpace;
+            Vector3 rayDirectionWorldSpace;
+
+            // first construct an arbitrary point that is on the ray through this screen pixel (remap screen pixel point to clip space [-1, 1])
+            Vector3 rayPointClipSpace = new Vector3(
+                (screenPixelPos.x - viewport.x) * 2.0f / viewport.width - 1.0f,
+                (screenPixelPos.y - viewport.y) * 2.0f / viewport.height - 1.0f,
+                0.95f
+            );
+
+            // and convert that point to camera space
+            Vector3 rayPointCameraSpace = clipToCam.MultiplyPoint(rayPointClipSpace);
+
+            if (camera.orthographic)
+            {
+                // ray direction is always 'camera forward' in orthographic mode
+                Vector3 rayDirectionCameraSpace = new Vector3(0.0f, 0.0f, -1.0f);
+                rayDirectionWorldSpace = camToWorld.MultiplyVector(rayDirectionCameraSpace);
+                rayDirectionWorldSpace.Normalize();
+
+                // in camera space, the ray origin has the same XY coordinates as ANY point on the ray
+                // so we just need to override the Z coordinate to startZ to get the correct starting point
+                // (assuming camToWorld is a pure rotation/offset, with no scale)
+                Vector3 rayOriginCameraSpace = rayPointCameraSpace;
+                // The camera/projection matrices follow OpenGL convention: positive Z is towards the viewer.
+                // So negate it to get into Unity convention.
+                rayOriginCameraSpace.z = -startZ;
+
+                // move it to world space
+                rayOriginWorldSpace = camToWorld.MultiplyPoint(rayOriginCameraSpace);
+            }
+            else
+            {
+                // in projective mode, the ray passes through the origin in camera space
+                // so the ray direction is just (ray point - origin) == (ray point)
+                Vector3 rayDirectionCameraSpace = rayPointCameraSpace;
+                rayDirectionCameraSpace.Normalize();
+
+                rayDirectionWorldSpace = camToWorld.MultiplyVector(rayDirectionCameraSpace);
+
+                // calculate the correct startZ offset from the camera by moving a distance along the ray direction
+                // this assumes camToWorld is a pure rotation/offset, with no scale, so we can use rayDirection.z to calculate how far we need to move
+                Vector3 cameraPositionWorldSpace = camToWorld.MultiplyPoint(Vector3.zero);
+                // The camera/projection matrices follow OpenGL convention: positive Z is towards the viewer.
+                // So negate it to get into Unity convention.
+                Vector3 originOffsetWorldSpace = rayDirectionWorldSpace * -startZ / rayDirectionCameraSpace.z;
+                rayOriginWorldSpace = cameraPositionWorldSpace + originOffsetWorldSpace;
+            }
+
+            return new Ray(rayOriginWorldSpace, rayDirectionWorldSpace);
         }
 
         // Figure out a rectangle to display a 2D GUI element in 3D space.
@@ -593,8 +934,13 @@ namespace UnityEditor
             return Internal_FindNearestVertex(cam, screenPoint, objectsToSearch, ignoreRaySnapObjects, out vertex);
         }
 
+#pragma warning disable 618
+        [Obsolete("Use PickGameObjectCallback")]
         internal delegate GameObject PickClosestGameObjectFunc(Camera cam, int layers, Vector2 position, GameObject[] ignore, GameObject[] filter, out int materialIndex);
+
+        [Obsolete("Use pickGameObjectCustomPasses")]
         internal static PickClosestGameObjectFunc pickClosestGameObjectDelegate;
+#pragma warning restore 618
 
         public static GameObject PickGameObject(Vector2 position, out int materialIndex)
         {
@@ -605,6 +951,9 @@ namespace UnityEditor
         {
             return PickGameObjectDelegated(position, ignore, null, out materialIndex);
         }
+
+        public delegate GameObject PickGameObjectCallback(Camera cam, int layers, Vector2 position, GameObject[] ignore, GameObject[] filter, out int materialIndex);
+        public static event PickGameObjectCallback pickGameObjectCustomPasses;
 
         internal static GameObject PickGameObjectDelegated(Vector2 position, GameObject[] ignore, GameObject[] filter, out int materialIndex)
         {
@@ -622,11 +971,28 @@ namespace UnityEditor
                 throw new ArgumentException("filter may not contain null elements");
 
             GameObject picked = null;
+
+            // deprecated version
+            #pragma warning disable 618
             if (pickClosestGameObjectDelegate != null)
                 picked = pickClosestGameObjectDelegate(cam, layers, position, ignore, filter, out materialIndex);
+            #pragma warning restore 618
 
             if (picked == null)
                 picked = Internal_PickClosestGO(cam, layers, position, ignore, filter, out materialIndex);
+
+            if (picked == null && pickGameObjectCustomPasses != null)
+            {
+                foreach (var method in pickGameObjectCustomPasses.GetInvocationList())
+                {
+                    picked = ((PickGameObjectCallback)method)(cam, layers, position, ignore, filter, out materialIndex);
+                    // don't trust this method to respect the ignore or filter argument, because in the event that it
+                    // does not it will break pick cycling in SceneViewPicking.GetAllOverlapping.
+                    if (picked != null && (ignore == null || !ignore.Contains(picked)) && (filter == null || filter.Contains(picked)))
+                        break;
+                    picked = null;
+                }
+            }
 
             return picked;
         }
@@ -647,9 +1013,9 @@ namespace UnityEditor
             GameObject picked = PickGameObjectDelegated(position, ignore, filter, out dummyMaterialIndex);
             if (picked && selectPrefabRoot)
             {
-                GameObject pickedRoot = FindSelectionBase(picked) ?? picked;
+                GameObject pickedRoot = FindSelectionBaseForPicking(picked) ?? picked;
                 Transform atc = Selection.activeTransform;
-                GameObject selectionRoot = atc ? (FindSelectionBase(atc.gameObject) ?? atc.gameObject) : null;
+                GameObject selectionRoot = atc ? (FindSelectionBaseForPicking(atc.gameObject) ?? atc.gameObject) : null;
                 if (pickedRoot == selectionRoot)
                     return picked;
                 return pickedRoot;
@@ -657,35 +1023,46 @@ namespace UnityEditor
             return picked;
         }
 
-        internal static GameObject FindSelectionBase(GameObject go)
+        // Get the selection base object, taking into account user enabled picking filter
+        internal static GameObject FindSelectionBaseForPicking(GameObject go)
         {
             if (go == null)
                 return null;
 
             // Find prefab based base
             Transform prefabBase = null;
-            if (PrefabUtility.IsPartOfNonAssetPrefabInstance(go))
-            {
-                prefabBase = PrefabUtility.GetOutermostPrefabInstanceRoot(go).transform;
-            }
 
-            // Find attribute based base
+            if (PrefabUtility.IsPartOfNonAssetPrefabInstance(go))
+                prefabBase = PrefabUtility.GetOutermostPrefabInstanceRoot(go).transform;
+
+            // Walk up the hierarchy to find the outermost prefab instance root that is not marked as non-pickable, or
+            // alternatively a GameObject with the SelectionBaseAttribute assigned.
             Transform tr = go.transform;
+            GameObject outerMostSelectableRoot = null;
+
             while (tr != null)
             {
-                // If we come across the prefab base, no need to search further down.
-                if (tr == prefabBase)
-                    return tr.gameObject;
+                if (!SceneVisibilityState.IsGameObjectPickingDisabled(tr.gameObject))
+                {
+                    // If we come across the prefab base, no need to search further
+                    if (tr == prefabBase)
+                        return tr.gameObject;
 
-                // If this one has the attribute, return this one.
-                if (AttributeHelper.GameObjectContainsAttribute<SelectionBaseAttribute>(tr.gameObject))
-                    return tr.gameObject;
+                    // If prefabBase is not pickable, we want to select the nearest pickable root to the base
+                    GameObject nestedRoot = PrefabUtility.GetNearestPrefabInstanceRoot(tr);
+
+                    if (nestedRoot != null && tr == nestedRoot.transform)
+                        outerMostSelectableRoot = tr.gameObject;
+
+                    // If a SelectionBaseAttribute is found, select the nearest to the picked GameObject
+                    if (AttributeHelper.GameObjectContainsAttribute<SelectionBaseAttribute>(tr.gameObject))
+                        return tr.gameObject;
+                }
 
                 tr = tr.parent;
             }
 
-            // There is neither a prefab or attribute based selection root, so return null
-            return null;
+            return outerMostSelectableRoot;
         }
 
         // The materials used to draw handles - Don't use unless you're Nicholas.
@@ -706,8 +1083,51 @@ namespace UnityEditor
         [RequiredByNativeCode]
         static void CleanupHandleMaterials()
         {
+            DisposeArcIndexBuffer();
             // This is enough for all of them to get re-fetched in next call to InitHandleMaterials()
             s_HandleWireMaterial = null;
+        }
+
+        static GraphicsBuffer s_ArcIndexBuffer;
+
+        static void DisposeArcIndexBuffer()
+        {
+            s_ArcIndexBuffer?.Dispose();
+            s_ArcIndexBuffer = null;
+        }
+
+        static internal GraphicsBuffer GetArcIndexBuffer(int segments, int sides)
+        {
+            int indexCount = (segments - 1) * sides * 2 * 3;
+            if (s_ArcIndexBuffer != null && s_ArcIndexBuffer.count == indexCount)
+                return s_ArcIndexBuffer;
+
+            s_ArcIndexBuffer?.Dispose();
+            AssemblyReloadEvents.beforeAssemblyReload += DisposeArcIndexBuffer;
+            EditorApplication.quitting += DisposeArcIndexBuffer;
+
+            s_ArcIndexBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Index, indexCount, 2);
+            ushort[] ib = new ushort[indexCount];
+            var idx = 0;
+            for (var seg = 0; seg < segments - 1; ++seg)
+            {
+                for (var side = 0; side < sides; ++side)
+                {
+                    var idx00 = seg * sides + side;
+                    var idx01 = seg * sides + (side + 1) % sides;
+                    var idx10 = (seg + 1) * sides + side;
+                    var idx11 = (seg + 1) * sides + (side + 1) % sides;
+                    ib[idx + 0] = (ushort)idx00;
+                    ib[idx + 1] = (ushort)idx10;
+                    ib[idx + 2] = (ushort)idx01;
+                    ib[idx + 3] = (ushort)idx01;
+                    ib[idx + 4] = (ushort)idx10;
+                    ib[idx + 5] = (ushort)idx11;
+                    idx += 6;
+                }
+            }
+            s_ArcIndexBuffer.SetData(ib);
+            return s_ArcIndexBuffer;
         }
 
         static void InitHandleMaterials()
@@ -729,6 +1149,8 @@ namespace UnityEditor
                 s_HandleDottedWireTextureIndex2D = ShaderUtil.GetTextureBindingIndex(s_HandleDottedWireMaterial2D.shader, Shader.PropertyToID("_MainTex"));
                 s_HandleDottedWireTextureSamplerIndex = ShaderUtil.GetTextureSamplerBindingIndex(s_HandleDottedWireMaterial.shader, Shader.PropertyToID("_MainTex"));
                 s_HandleDottedWireTextureSamplerIndex2D = ShaderUtil.GetTextureSamplerBindingIndex(s_HandleDottedWireMaterial2D.shader, Shader.PropertyToID("_MainTex"));
+
+                s_HandleArcMaterial = (Material)EditorGUIUtility.LoadRequired("SceneView/CircularArc.mat");
             }
         }
 
@@ -755,6 +1177,15 @@ namespace UnityEditor
             }
         }
 
+        static internal Material handleArcMaterial
+        {
+            get
+            {
+                InitHandleMaterials();
+                return s_HandleArcMaterial;
+            }
+        }
+
         static Material s_HandleWireMaterial;
         static Material s_HandleWireMaterial2D;
         static int s_HandleWireTextureIndex;
@@ -768,6 +1199,8 @@ namespace UnityEditor
         static int s_HandleDottedWireTextureSamplerIndex;
         static int s_HandleDottedWireTextureIndex2D;
         static int s_HandleDottedWireTextureSamplerIndex2D;
+
+        static Material s_HandleArcMaterial;
 
         // Setup shader for later drawing of lines / anti-aliased lines.
         internal static void ApplyWireMaterial([DefaultValue("UnityEngine.Rendering.CompareFunction.Always")] CompareFunction zTest)
@@ -871,18 +1304,55 @@ namespace UnityEditor
         // Casts /ray/ against the scene.
         public static object RaySnap(Ray ray)
         {
-            PhysicsScene physicsScene = Physics.defaultPhysicsScene;
-            Scene customScene = Camera.current.scene;
+            Camera cam = Camera.current;
+            ulong sceneCullingMask = cam.sceneCullingMask;
+            int layerCullingMask = cam.cullingMask;
 
-            if (customScene.IsValid())
+            bool hitAny = false;
+            RaycastHit raycastHit = default(RaycastHit);
+            raycastHit.distance = Mathf.Infinity;
+
+            if (sceneCullingMask == SceneCullingMasks.MainStageSceneViewObjects)
             {
-                physicsScene = customScene.GetPhysicsScene();
+                // Default code path for Scene view that is just displaying the Main Stage.
+                // Note that even if Prefab Mode is open, special Scene views can still show the Main Stage!
+                // We only check against default physics scene here, and shouldn't ignore Prefab instances
+                // that are opened in Prefab Mode in Context.
+                hitAny |= GetNearestHitFromPhysicsScene(ray, Physics.defaultPhysicsScene, layerCullingMask, false, ref raycastHit);
+            }
+            else
+            {
+                // Code path is Scene view is displaying a Prefab Stage.
+                // Here we dig down from the top of the stage history stack and continue
+                // including each stage as long as they are displayed as context. Prefab instances
+                // that are hidden due to being opened in Prefab Mode in Context should be ignored.
+                var stageHistory = StageNavigationManager.instance.stageHistory;
+                for (int i = stageHistory.Count - 1; i >= 0; i--)
+                {
+                    Stage stage = stageHistory[i];
+                    var previewSceneStage = stage as PreviewSceneStage;
+                    PhysicsScene physics = previewSceneStage != null ? previewSceneStage.scene.GetPhysicsScene() : Physics.defaultPhysicsScene;
+                    hitAny |= GetNearestHitFromPhysicsScene(ray, physics, layerCullingMask, true, ref raycastHit);
+                    var prefabStage = previewSceneStage as PrefabStage;
+                    if (prefabStage == null ||
+                        prefabStage.mode == PrefabStage.Mode.InIsolation ||
+                        StageNavigationManager.instance.contextRenderMode == StageUtility.ContextRenderMode.Hidden)
+                        break;
+                }
             }
 
-            int numHits = physicsScene.Raycast(ray.origin, ray.direction, s_RaySnapHits, Mathf.Infinity, Camera.current.cullingMask, QueryTriggerInteraction.Ignore);
+            if (hitAny)
+                return raycastHit;
+            return null;
+        }
+
+        static bool GetNearestHitFromPhysicsScene(Ray ray, PhysicsScene physicsScene, int cullingMask, bool ignorePrefabInstance, ref RaycastHit raycastHit)
+        {
+            float maxDist = raycastHit.distance;
+            int numHits = physicsScene.Raycast(ray.origin, ray.direction, s_RaySnapHits, maxDist, cullingMask, QueryTriggerInteraction.Ignore);
 
             // We are not sure at this point if the hits returned from RaycastAll are sorted or not, so go through them all
-            float nearestHitDist = Mathf.Infinity;
+            float nearestHitDist = maxDist;
             int nearestHitIndex = -1;
             if (ignoreRaySnapObjects != null)
             {
@@ -890,20 +1360,24 @@ namespace UnityEditor
                 {
                     if (s_RaySnapHits[i].distance < nearestHitDist)
                     {
+                        Transform tr = s_RaySnapHits[i].transform;
+                        if (ignorePrefabInstance && GameObjectUtility.IsPrefabInstanceHiddenForInContextEditing(tr.gameObject))
+                            continue;
+
                         bool ignore = false;
                         for (int j = 0; j < ignoreRaySnapObjects.Length; j++)
                         {
-                            if (s_RaySnapHits[i].transform == ignoreRaySnapObjects[j])
+                            if (tr == ignoreRaySnapObjects[j])
                             {
                                 ignore = true;
                                 break;
                             }
                         }
-                        if (!ignore)
-                        {
-                            nearestHitDist = s_RaySnapHits[i].distance;
-                            nearestHitIndex = i;
-                        }
+                        if (ignore)
+                            continue;
+
+                        nearestHitDist = s_RaySnapHits[i].distance;
+                        nearestHitIndex = i;
                     }
                 }
             }
@@ -920,8 +1394,49 @@ namespace UnityEditor
             }
 
             if (nearestHitIndex >= 0)
-                return s_RaySnapHits[nearestHitIndex];
-            return null;
+            {
+                raycastHit = s_RaySnapHits[nearestHitIndex];
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        public delegate bool PlaceObjectDelegate(Vector2 guiPosition, out Vector3 position, out Vector3 normal);
+        public static event PlaceObjectDelegate placeObjectCustomPasses;
+
+        public static bool PlaceObject(Vector2 guiPosition, out Vector3 position, out Vector3 normal)
+        {
+            Ray ray = GUIPointToWorldRay(guiPosition);
+            object hit = RaySnap(ray);
+            bool objectIntersected = hit != null;
+            float bestDistance = objectIntersected ? ((RaycastHit)hit).distance : Mathf.Infinity;
+            position = objectIntersected ? ray.GetPoint(((RaycastHit)hit).distance) : Vector3.zero;
+            normal = objectIntersected ? ((RaycastHit)hit).normal : Vector3.up;
+
+            if (placeObjectCustomPasses != null)
+            {
+                foreach (var del in placeObjectCustomPasses.GetInvocationList())
+                {
+                    Vector3 pos, nrm;
+
+                    if (((PlaceObjectDelegate)del)(guiPosition, out pos, out nrm))
+                    {
+                        var dst = Vector3.Distance(ray.origin, pos);
+                        if (dst < bestDistance)
+                        {
+                            objectIntersected = true;
+                            bestDistance = dst;
+                            position = pos;
+                            normal = nrm;
+                        }
+                    }
+                }
+            }
+
+            return objectIntersected;
         }
 
         // Repaint the current view

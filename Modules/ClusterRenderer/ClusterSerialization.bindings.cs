@@ -60,22 +60,22 @@ namespace UnityEngine
             }
         }
 
-        [FreeFunction("ClusterSerialization::SaveTimeManagerState")]
+        [FreeFunction("ClusterSerialization::SaveTimeManagerState", ThrowsException = true)]
         private static extern unsafe int SaveTimeManagerStateInternal(void* intBuffer, int bufferSize);
 
-        [FreeFunction("ClusterSerialization::RestoreTimeManagerState")]
+        [FreeFunction("ClusterSerialization::RestoreTimeManagerState", ThrowsException = true)]
         private static extern unsafe bool RestoreTimeManagerStateInternal(void* buffer, int bufferSize);
 
-        [FreeFunction("ClusterSerialization::SaveInputManagerState")]
+        [FreeFunction("ClusterSerialization::SaveInputManagerState", ThrowsException = true)]
         private static extern unsafe int SaveInputManagerStateInternal(void* intBuffer, int bufferSize);
 
-        [FreeFunction("ClusterSerialization::RestoreInputManagerState")]
+        [FreeFunction("ClusterSerialization::RestoreInputManagerState", ThrowsException = true)]
         private static extern unsafe bool RestoreInputManagerStateInternal(void* buffer, int bufferSize);
 
-        [FreeFunction("ClusterSerialization::SaveClusterInputState")]
+        [FreeFunction("ClusterSerialization::SaveClusterInputState", ThrowsException = true)]
         private static extern unsafe int SaveClusterInputStateInternal(void* intBuffer, int bufferSize);
 
-        [FreeFunction("ClusterSerialization::RestoreClusterInputState")]
+        [FreeFunction("ClusterSerialization::RestoreClusterInputState", ThrowsException = true)]
         private static extern unsafe bool RestoreClusterInputStateInternal(void* buffer, int bufferSize);
     }
 }

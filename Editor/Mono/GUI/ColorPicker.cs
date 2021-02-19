@@ -43,8 +43,6 @@ namespace UnityEditor
         bool m_ShowPresets = true;
 
         [SerializeField]
-        bool m_IsOSColorPicker = false;
-        [SerializeField]
         bool m_ShowAlpha = true;
 
         [SerializeField]
@@ -745,7 +743,7 @@ namespace UnityEditor
                 if (Event.current.type == EventType.Repaint)
                 {
                     var backgroundRect = rect;
-                    backgroundRect.xMin += EditorGUIUtility.labelWidth;
+                    backgroundRect.xMin += EditorGUIUtility.labelWidth + Styles.sliderBackground.padding.horizontal;
                     backgroundRect.xMax -= EditorGUIUtility.fieldWidth + EditorGUI.kSpacing;
                     backgroundRect = Styles.sliderBackground.padding.Remove(backgroundRect);
                     var uvLayout = new Rect
@@ -1032,19 +1030,22 @@ namespace UnityEditor
                     switch (evt.commandName)
                     {
                         case EventCommandNames.Copy:
-                            ColorClipboard.SetColor(color);
+                            Clipboard.colorValue = color;
                             evt.Use();
                             break;
 
                         case EventCommandNames.Paste:
-                            Color colorFromClipboard;
-                            if (ColorClipboard.TryGetColor(m_HDR, out colorFromClipboard))
+                            if (Clipboard.hasColor)
                             {
+                                Color pasted = Clipboard.colorValue;
+                                if (!m_HDR && pasted.maxColorComponent > 1f)
+                                    pasted = pasted.RGBMultiplied(1f / pasted.maxColorComponent);
+
                                 // Do not change alpha if color field is not showing alpha
                                 if (!m_ShowAlpha)
-                                    colorFromClipboard.a = m_Color.GetColorChannelNormalized(RgbaChannel.A);
+                                    pasted.a = m_Color.GetColorChannelNormalized(RgbaChannel.A);
 
-                                SetColor(colorFromClipboard);
+                                SetColor(pasted);
 
                                 GUI.changed = true;
                                 evt.Use();
@@ -1094,10 +1095,9 @@ namespace UnityEditor
             if (m_DelegateView != null)
             {
                 var e = EditorGUIUtility.CommandEvent(EventCommandNames.ColorPickerChanged);
-                if (!m_IsOSColorPicker)
-                    Repaint();
+                Repaint();
                 m_DelegateView.SendEvent(e);
-                if (!m_IsOSColorPicker && exitGUI)
+                if (exitGUI)
                     GUIUtility.ExitGUI();
             }
             if (m_ColorChangedCallback != null)
@@ -1108,17 +1108,12 @@ namespace UnityEditor
 
         private void SetColor(Color c)
         {
-            if (m_IsOSColorPicker)
-                OSColorPicker.color = c;
-            else
-            {
-                m_Color.SetColorChannelHdr(RgbaChannel.R, c.r);
-                m_Color.SetColorChannelHdr(RgbaChannel.G, c.g);
-                m_Color.SetColorChannelHdr(RgbaChannel.B, c.b);
-                m_Color.SetColorChannelHdr(RgbaChannel.A, c.a);
-                OnColorChanged();
-                Repaint();
-            }
+            m_Color.SetColorChannelHdr(RgbaChannel.R, c.r);
+            m_Color.SetColorChannelHdr(RgbaChannel.G, c.g);
+            m_Color.SetColorChannelHdr(RgbaChannel.B, c.b);
+            m_Color.SetColorChannelHdr(RgbaChannel.A, c.a);
+            OnColorChanged();
+            Repaint();
         }
 
         public static void Show(GUIView viewToUpdate, Color col, bool showAlpha = true, bool hdr = false)
@@ -1145,7 +1140,6 @@ namespace UnityEditor
 
             if (cp.m_HDR)
             {
-                cp.m_IsOSColorPicker = false;
                 cp.m_SliderMode = (SliderMode)EditorPrefs.GetInt(k_SliderModeHDRPrefKey, (int)SliderMode.RGB);
             }
             else
@@ -1154,51 +1148,18 @@ namespace UnityEditor
                 cp.m_Color.exposureValue = 0;
             }
 
-            if (cp.m_IsOSColorPicker)
-            {
-                cp.SetColor(col);
-                OSColorPicker.Show(showAlpha);
-            }
-            else
-            {
-                cp.titleContent = hdr ? EditorGUIUtility.TrTextContent("HDR Color") : EditorGUIUtility.TrTextContent("Color");
-                float height = EditorPrefs.GetInt(k_HeightPrefKey, (int)cp.position.height);
-                cp.minSize = new Vector2(Styles.fixedWindowWidth, height);
-                cp.maxSize = new Vector2(Styles.fixedWindowWidth, height);
-                cp.InitializePresetsLibraryIfNeeded(); // Ensure the heavy lifting of loading presets is done before window is visible
-                cp.ShowAuxWindow();
-            }
-        }
-
-        void PollOSColorPicker()
-        {
-            if (m_IsOSColorPicker)
-            {
-                if (!OSColorPicker.visible || Application.platform != RuntimePlatform.OSXEditor)
-                {
-                    DestroyImmediate(this);
-                }
-                else
-                {
-                    Color c = OSColorPicker.color;
-                    if (m_Color.color != c)
-                    {
-                        m_Color.SetColorChannel(RgbaChannel.R, c.r);
-                        m_Color.SetColorChannel(RgbaChannel.G, c.g);
-                        m_Color.SetColorChannel(RgbaChannel.B, c.b);
-                        m_Color.SetColorChannel(RgbaChannel.A, c.a);
-                        OnColorChanged();
-                    }
-                }
-            }
+            cp.titleContent = hdr ? EditorGUIUtility.TrTextContent("HDR Color") : EditorGUIUtility.TrTextContent("Color");
+            float height = EditorPrefs.GetInt(k_HeightPrefKey, (int)cp.position.height);
+            cp.minSize = new Vector2(Styles.fixedWindowWidth, height);
+            cp.maxSize = new Vector2(Styles.fixedWindowWidth, height);
+            cp.InitializePresetsLibraryIfNeeded(); // Ensure the heavy lifting of loading presets is done before window is visible
+            cp.ShowAuxWindow();
         }
 
         void OnEnable()
         {
             hideFlags = HideFlags.DontSave;
-            m_IsOSColorPicker = EditorPrefs.GetBool("UseOSColorPicker");
             hideFlags = HideFlags.DontSave;
-            EditorApplication.update += PollOSColorPicker;
             EditorGUIUtility.editingTextField = true; // To fix that color values is not directly editable when tabbing (case 557510)
 
             m_SliderMode = (SliderMode)EditorPrefs.GetInt(k_SliderModePrefKey, (int)SliderMode.RGB);
@@ -1235,10 +1196,6 @@ namespace UnityEditor
             if (m_AlphaTexture)
                 DestroyImmediate(m_AlphaTexture);
             s_Instance = null;
-            if (m_IsOSColorPicker)
-                OSColorPicker.Close();
-
-            EditorApplication.update -= PollOSColorPicker;
 
             if (m_ColorLibraryEditorState != null)
                 m_ColorLibraryEditorState.TransferEditorPrefsState(false);
@@ -1284,7 +1241,7 @@ namespace UnityEditor
             win.title = "EyeDropper";
             win.hideFlags = HideFlags.DontSave;
             win.rootView = instance;
-            win.Show(ShowMode.PopupMenu, loadPosition: true, displayImmediately: false, setFocus: true);
+            win.Show(ShowMode.PopupMenu, loadPosition: true, displayImmediately: true, setFocus: true);
             instance.AddToAuxWindowList();
             win.SetInvisible();
             instance.SetMinMaxSizes(new Vector2(0, 0), new Vector2(kDummyWindowSize, kDummyWindowSize));
@@ -1296,7 +1253,10 @@ namespace UnityEditor
         public static void End()
         {
             if (s_Instance != null)
+            {
                 s_Instance.window.Close();
+                s_Instance = null;
+            }
         }
 
         static EyeDropper instance

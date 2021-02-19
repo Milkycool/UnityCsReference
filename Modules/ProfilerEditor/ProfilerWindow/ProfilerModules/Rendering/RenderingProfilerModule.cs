@@ -21,6 +21,8 @@ namespace UnityEditorInternal.Profiling
 
         public override void DrawToolbar(Rect position)
         {
+            if (UnityEditor.MPE.ProcessService.level != UnityEditor.MPE.ProcessLevel.Master)
+                return;
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             if (GUILayout.Button(GUI.enabled
                 ? Styles.frameDebugger

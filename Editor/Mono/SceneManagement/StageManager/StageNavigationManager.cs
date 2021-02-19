@@ -190,13 +190,6 @@ namespace UnityEditor.SceneManagement
                 return false;
             }
 
-            if (stage.isAssetMissing)
-            {
-                Debug.LogError($"Cannot switch to new stage. Asset does not exist so stage cannot be reconstructed: {stage.assetPath}");
-                DestroyImmediate(stage);
-                return false;
-            }
-
             bool setPreviousSelection = stage.opened;
 
             StopAnimationPlaybackAndPreviewing();
@@ -212,9 +205,7 @@ namespace UnityEditor.SceneManagement
                 return false;
             }
 
-
             // User accepted to switch stage (and lose any data if not saved)
-
             // Here we save current Hierarchy and SceneView stage state
             beforeSwitchingAwayFromStage?.Invoke(previousStage);
 
@@ -255,6 +246,7 @@ namespace UnityEditor.SceneManagement
                 }
                 else
                 {
+                    stage.OnReturnToStage();
                     success = stage.isValid;
                 }
 

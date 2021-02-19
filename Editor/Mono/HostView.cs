@@ -10,6 +10,7 @@ using UnityEditor.Profiling;
 using System.Linq;
 using UnityEditor.ShortcutManagement;
 using UnityEditor.StyleSheets;
+using UnityEditor.UIElements;
 
 namespace UnityEditor
 {
@@ -18,6 +19,9 @@ namespace UnityEditor
         static class Styles
         {
             public static readonly GUIStyle background = new GUIStyle("hostview");
+            public static readonly GUIStyle overlay = "dockareaoverlay";
+            public static readonly GUIStyle paneOptions = "PaneOptions";
+            public static readonly GUIStyle tabWindowBackground = "TabWindowBackground";
 
             static Styles()
             {
@@ -34,6 +38,23 @@ namespace UnityEditor
         [SerializeField] private EditorWindow m_ActualView;
         [NonSerialized] protected readonly RectOffset m_BorderSize = new RectOffset();
 
+        protected delegate void EditorWindowDelegate();
+        protected delegate void EditorWindowShowButtonDelegate(Rect rect);
+
+        protected EditorWindowDelegate m_OnGUI;
+        protected EditorWindowDelegate m_OnFocus;
+        protected EditorWindowDelegate m_OnLostFocus;
+        protected EditorWindowDelegate m_OnProjectChange;
+        protected EditorWindowDelegate m_OnSelectionChange;
+        protected EditorWindowDelegate m_OnDidOpenScene;
+        protected EditorWindowDelegate m_OnInspectorUpdate;
+        protected EditorWindowDelegate m_OnHierarchyChange;
+        protected EditorWindowDelegate m_OnBecameVisible;
+        protected EditorWindowDelegate m_OnBecameInvisible;
+        protected EditorWindowDelegate m_Update;
+        protected EditorWindowDelegate m_ModifierKeysChanged;
+        protected EditorWindowShowButtonDelegate m_ShowButton;
+
         internal EditorWindow actualView
         {
             get { return m_ActualView; }
@@ -44,18 +65,36 @@ namespace UnityEditor
         {
             if (m_ActualView == value)
                 return;
+
             DeregisterSelectedPane(clearActualView: true, sendEvents: true);
             m_ActualView = value;
+            m_ActualViewName = null;
 
-            if (m_ActualView != null)
-            {
-                m_ActualView.uiRootElementCreated = ValidateWindowBackendForCurrentView;
-            }
+            CreateDelegates();
 
             name = GetViewName();
             SetActualViewName(name);
             RegisterSelectedPane(sendEvents);
             actualViewChanged?.Invoke(this);
+        }
+
+        private void CreateDelegates()
+        {
+            m_OnGUI = CreateDelegate("OnGUI");
+            m_OnFocus = CreateDelegate("OnFocus");
+            m_OnLostFocus = CreateDelegate("OnLostFocus");
+            m_OnProjectChange = CreateDelegate("OnProjectChange");
+            m_OnSelectionChange = CreateDelegate("OnSelectionChange");
+            m_OnDidOpenScene = CreateDelegate("OnDidOpenScene");
+            m_OnInspectorUpdate = CreateDelegate("OnInspectorUpdate");
+            m_OnHierarchyChange = CreateDelegate("OnHierarchyChange");
+            m_OnBecameVisible = CreateDelegate("OnBecameVisible");
+            m_OnBecameInvisible = CreateDelegate("OnBecameInvisible");
+            m_Update = CreateDelegate("Update");
+            m_ModifierKeysChanged = CreateDelegate("ModifierKeysChanged");
+            var methodInfo = GetPaneMethod("ShowButton");
+            if (methodInfo != null)
+                m_ShowButton = (EditorWindowShowButtonDelegate)Delegate.CreateDelegate(typeof(EditorWindowShowButtonDelegate), m_ActualView, methodInfo);
         }
 
         internal void ResetActiveView()
@@ -72,16 +111,14 @@ namespace UnityEditor
 
         RectOffset IEditorWindowModel.viewMargins => GetBorderSize();
 
-        Action IEditorWindowModel.viewMarginsChanged { get; set; }
-
-        Action IEditorWindowModel.rootVisualElementCreated { get; set; }
+        Action IEditorWindowModel.onSplitterGUIHandler { get; set; }
 
         protected void UpdateViewMargins(EditorWindow view)
         {
             if (view == null)
                 return;
 
-            ((IEditorWindowModel)this).viewMarginsChanged?.Invoke();
+            editorWindowBackend?.ViewMarginsChanged();
         }
 
         protected override void SetPosition(Rect newPos)
@@ -111,13 +148,9 @@ namespace UnityEditor
 
         protected override void OnEnable()
         {
+            CreateDelegates();
             EditorPrefs.onValueWasUpdated += PlayModeTintColorChangedCallback;
             base.OnEnable();
-
-            if (m_ActualView != null)
-            {
-                m_ActualView.uiRootElementCreated = ValidateWindowBackendForCurrentView;
-            }
 
             RegisterSelectedPane(sendEvents: true);
         }
@@ -127,6 +160,10 @@ namespace UnityEditor
             EditorPrefs.onValueWasUpdated -= PlayModeTintColorChangedCallback;
             base.OnDisable();
             DeregisterSelectedPane(clearActualView: false, sendEvents: true);
+            // Host views are destroyed in the middle of an OnGUI loop, so we need to ensure that we're not invoking
+            // OnGUI on destroyed instances.
+            m_OnGUI = null;
+            m_Update = null;
         }
 
         private void HandleSplitView()
@@ -189,7 +226,7 @@ namespace UnityEditor
                 try
                 {
                     HandleSplitView();
-                    Invoke("OnGUI");
+                    m_OnGUI?.Invoke();
                 }
                 finally
                 {
@@ -201,18 +238,15 @@ namespace UnityEditor
             }
         }
 
-        Action IEditorWindowModel.focused { get; set; }
-        Action IEditorWindowModel.blurred { get; set; }
-
         protected override bool OnFocus()
         {
-            Invoke("OnFocus");
+            m_OnFocus?.Invoke();
 
             // Callback could have killed us. If so, die now...
             if (!this)
                 return false;
 
-            ((IEditorWindowModel)this).focused?.Invoke();
+            editorWindowBackend?.Focused();
 
             Repaint();
             return true;
@@ -221,13 +255,13 @@ namespace UnityEditor
         internal void OnLostFocus()
         {
             EditorGUI.EndEditingActiveTextField();
-            Invoke("OnLostFocus");
+            m_OnLostFocus?.Invoke();
 
             // Callback could have killed us
             if (!this)
                 return;
 
-            ((IEditorWindowModel)this).blurred?.Invoke();
+            editorWindowBackend?.Blurred();
 
             Repaint();
         }
@@ -288,31 +322,42 @@ namespace UnityEditor
 
         // Messages sent by Unity to editor windows today.
         // The implementation is not very good, but oh well... it gets the message across.
+        internal void OnMainWindowMove()
+        {
+            Invoke("OnMainWindowMove");
+        }
+
         internal void OnProjectChange()
         {
-            Invoke("OnProjectChange");
+            m_OnProjectChange?.Invoke();
         }
 
         internal void OnSelectionChange()
         {
-            UnityEngine.Profiling.Profiler.BeginSample("HostView.OnSelectionChange." + GetViewName());
-            Invoke("OnSelectionChange");
-            UnityEngine.Profiling.Profiler.EndSample();
+            m_OnSelectionChange?.Invoke();
         }
 
         internal void OnDidOpenScene()
         {
-            Invoke("OnDidOpenScene");
+            m_OnDidOpenScene?.Invoke();
         }
 
         internal void OnInspectorUpdate()
         {
-            Invoke("OnInspectorUpdate");
+            m_OnInspectorUpdate?.Invoke();
         }
 
         internal void OnHierarchyChange()
         {
-            Invoke("OnHierarchyChange");
+            m_OnHierarchyChange?.Invoke();
+        }
+
+        EditorWindowDelegate CreateDelegate(string methodName)
+        {
+            var methodInfo = GetPaneMethod(methodName);
+            if (methodInfo != null)
+                return (EditorWindowDelegate)Delegate.CreateDelegate(typeof(EditorWindowDelegate), m_ActualView, methodInfo);
+            return null;
         }
 
         MethodInfo GetPaneMethod(string methodName)
@@ -320,7 +365,7 @@ namespace UnityEditor
             return GetPaneMethod(methodName, m_ActualView);
         }
 
-        MethodInfo GetPaneMethod(string methodName, object obj)
+        protected MethodInfo GetPaneMethod(string methodName, object obj)
         {
             if (obj == null)
                 return null;
@@ -338,26 +383,32 @@ namespace UnityEditor
             return null;
         }
 
-        static class HostViewStyles
+        private string m_ActualViewName;
+        private string GetActualViewName()
         {
-            public static readonly GUIStyle overlay = "dockareaoverlay";
+            if (m_ActualViewName != null)
+                return m_ActualViewName;
+            m_ActualViewName = actualView != null ? actualView.GetType().Name : GetType().Name;
+            return m_ActualViewName;
         }
 
         public void InvokeOnGUI(Rect onGUIPosition, Rect viewRect)
         {
+            if (!this)
+                return;
+
             DoWindowDecorationStart();
 
-            BeginOffsetArea(viewRect, GUIContent.none, "TabWindowBackground");
+            BeginOffsetArea(viewRect, GUIContent.none, Styles.tabWindowBackground);
 
             EditorGUIUtility.ResetGUIState();
 
             bool isExitGUIException = false;
             try
             {
-                var viewName = actualView != null ? actualView.GetType().Name : GetType().Name;
-                using (new EditorPerformanceTracker(viewName + ".OnGUI." + Event.current.type))
+                using (new EditorPerformanceTracker($"{GetActualViewName()}.OnGUI.{Event.current.type}"))
                 {
-                    Invoke("OnGUI");
+                    m_OnGUI?.Invoke();
                 }
             }
             catch (TargetInvocationException e)
@@ -380,7 +431,7 @@ namespace UnityEditor
                     DoWindowDecorationEnd();
 
                     if (Event.current != null && Event.current.type == EventType.Repaint)
-                        HostViewStyles.overlay.Draw(onGUIPosition, GUIContent.none, 0);
+                        Styles.overlay.Draw(onGUIPosition, GUIContent.none, 0);
                 }
             }
         }
@@ -399,18 +450,10 @@ namespace UnityEditor
 
         EditorWindow IEditorWindowModel.window => m_ActualView;
 
-        Action IEditorWindowModel.onRegisterWindow { get; set; }
-        Action IEditorWindowModel.onUnegisterWindow { get; set; }
-
-        private void ValidateWindowBackendForCurrentView()
+        public IEditorWindowBackend editorWindowBackend
         {
-            if (!EditorWindowBackendManager.IsBackendCompatible(windowBackend, this))
-            {
-                //We create a new compatible backend
-                windowBackend = EditorWindowBackendManager.GetBackend(this);
-            }
-
-            ((IEditorWindowModel)this).rootVisualElementCreated?.Invoke();
+            get { return windowBackend as IEditorWindowBackend; }
+            set { windowBackend = value; }
         }
 
         protected void RegisterSelectedPane(bool sendEvents)
@@ -420,24 +463,27 @@ namespace UnityEditor
 
             m_ActualView.m_Parent = this;
 
-            if (!EditorWindowBackendManager.IsBackendCompatible(windowBackend, this))
-            {
-                //We create a new compatible backend
-                windowBackend = EditorWindowBackendManager.GetBackend(this);
-            }
+            ValidateWindowBackendForCurrentView();
 
-            ((IEditorWindowModel)this).onRegisterWindow?.Invoke();
+            editorWindowBackend?.OnRegisterWindow();
 
             if (GetPaneMethod("Update") != null)
+            {
+                EditorApplication.update -= SendUpdate;
                 EditorApplication.update += SendUpdate;
+            }
 
             if (GetPaneMethod("ModifierKeysChanged") != null)
+            {
+                EditorApplication.modifierKeysChanged -= SendModKeysChanged;
                 EditorApplication.modifierKeysChanged += SendModKeysChanged;
+            }
 
             m_ActualView.MakeParentsSettingsMatchMe();
 
             if (m_ActualView.m_FadeoutTime != 0)
             {
+                EditorApplication.update -= m_ActualView.CheckForWindowRepaint;
                 EditorApplication.update += m_ActualView.CheckForWindowRepaint;
             }
 
@@ -445,8 +491,8 @@ namespace UnityEditor
             {
                 try
                 {
-                    Invoke("OnBecameVisible");
-                    Invoke("OnFocus");
+                    m_OnBecameVisible?.Invoke();
+                    m_OnFocus?.Invoke();
                 }
                 catch (TargetInvocationException ex)
                 {
@@ -464,12 +510,12 @@ namespace UnityEditor
             if (!m_ActualView)
                 return;
 
-            ((IEditorWindowModel)this).onUnegisterWindow?.Invoke();
+            editorWindowBackend?.OnUnregisterWindow();
 
-            if (GetPaneMethod("Update") != null)
+            if (m_Update != null)
                 EditorApplication.update -= SendUpdate;
 
-            if (GetPaneMethod("ModifierKeysChanged") != null)
+            if (m_ModifierKeysChanged != null)
                 EditorApplication.modifierKeysChanged -= SendModKeysChanged;
 
             if (m_ActualView.m_FadeoutTime != 0)
@@ -479,18 +525,14 @@ namespace UnityEditor
 
             if (clearActualView)
             {
-                EditorWindow oldActualView = m_ActualView;
-
-                if (oldActualView.uiRootElementCreated == ValidateWindowBackendForCurrentView)
-                {
-                    oldActualView.uiRootElementCreated = null;
-                }
+                var onLostFocus = m_OnLostFocus;
+                var onBecameInvisible = m_OnBecameInvisible;
 
                 m_ActualView = null;
                 if (sendEvents)
                 {
-                    Invoke("OnLostFocus", oldActualView);
-                    Invoke("OnBecameInvisible", oldActualView);
+                    onLostFocus?.Invoke();
+                    onBecameInvisible?.Invoke();
                 }
             }
         }
@@ -499,8 +541,6 @@ namespace UnityEditor
 
         bool IEditorWindowModel.notificationVisible => m_NotificationIsVisible;
 
-        Action IEditorWindowModel.notificationVisibilityChanged { get; set; }
-
         protected void CheckNotificationStatus()
         {
             if (m_ActualView != null && m_ActualView.m_FadeoutTime != 0)
@@ -508,24 +548,24 @@ namespace UnityEditor
                 if (!m_NotificationIsVisible)
                 {
                     m_NotificationIsVisible = true;
-                    ((IEditorWindowModel)this).notificationVisibilityChanged?.Invoke();
+                    editorWindowBackend?.NotificationVisibilityChanged();
                 }
             }
             else if (m_NotificationIsVisible)
             {
                 m_NotificationIsVisible = false;
-                ((IEditorWindowModel)this).notificationVisibilityChanged?.Invoke();
+                editorWindowBackend?.NotificationVisibilityChanged();
             }
         }
 
         void SendUpdate()
         {
-            Invoke("Update");
+            m_Update?.Invoke();
         }
 
         void SendModKeysChanged()
         {
-            Invoke("ModifierKeysChanged");
+            m_ModifierKeysChanged?.Invoke();
         }
 
         internal RectOffset borderSize => GetBorderSize();
@@ -558,8 +598,8 @@ namespace UnityEditor
         internal float GetExtraButtonsWidth()
         {
             float extraWidth = 0;
-            MethodInfo mi = GetPaneMethod("ShowButton", m_ActualView);
-            if (mi != null) extraWidth += ContainerWindow.kButtonWidth;
+
+            if (m_ShowButton != null) extraWidth += ContainerWindow.kButtonWidth;
 
             foreach (var item in windowActions)
             {
@@ -572,18 +612,15 @@ namespace UnityEditor
         internal const float k_iconMargin = 1f;
         protected void ShowGenericMenu(float leftOffset, float topOffset)
         {
-            GUIStyle gs = "PaneOptions";
-            Rect paneMenu = new Rect(leftOffset, topOffset, gs.fixedWidth, gs.fixedHeight);
-            if (EditorGUI.DropdownButton(paneMenu, GUIContent.none, FocusType.Passive, "PaneOptions"))
+            Rect paneMenu = new Rect(leftOffset, topOffset, Styles.paneOptions.fixedWidth, Styles.paneOptions.fixedHeight);
+            if (EditorGUI.DropdownButton(paneMenu, GUIContent.none, FocusType.Passive, Styles.paneOptions))
                 PopupGenericMenu(m_ActualView, paneMenu);
 
             // Give panes an option of showing a small button next to the generic menu (used for inspector lock icon
-            MethodInfo mi = GetPaneMethod("ShowButton", m_ActualView);
-            if (mi != null)
+            if (m_ShowButton != null)
             {
                 leftOffset -= ContainerWindow.kButtonWidth + k_iconMargin;
-                object[] lockButton = { new Rect(leftOffset, topOffset, ContainerWindow.kButtonWidth, ContainerWindow.kButtonHeight) };
-                mi.Invoke(m_ActualView, lockButton);
+                m_ShowButton.Invoke(new Rect(leftOffset, topOffset, ContainerWindow.kButtonWidth, ContainerWindow.kButtonHeight));
             }
 
             foreach (var item in windowActions)
@@ -634,7 +671,8 @@ namespace UnityEditor
 
             AddDefaultItemsToMenu(menu, view);
 
-            AddWindowActionMenu(menu, view);
+            if (view != null)
+                AddWindowActionMenu(menu, view);
 
             menu.DropDown(pos);
             Event.current.Use();
@@ -712,7 +750,7 @@ namespace UnityEditor
             if (menu.GetItemCount() != 0)
                 menu.AddSeparator("");
 
-            if (Unsupported.IsDeveloperMode())
+            if (window && Unsupported.IsDeveloperMode())
             {
                 menu.AddItem(EditorGUIUtility.TrTextContent("Inspect Window"), false, Inspect, window);
                 menu.AddItem(EditorGUIUtility.TrTextContent("Inspect View"), false, Inspect, window.m_Parent);
@@ -723,16 +761,13 @@ namespace UnityEditor
         }
 
         Color IEditorWindowModel.playModeTintColor => kPlayModeDarken.Color;
-        Action IEditorWindowModel.playModeTintColorChanged { get; set; }
 
         private void PlayModeTintColorChangedCallback(string key)
         {
             if (key == kPlayModeDarkenKey)
             {
-                ((IEditorWindowModel)this).playModeTintColorChanged?.Invoke();
+                editorWindowBackend?.PlayModeTintColorChanged();
             }
         }
-
-        Action<GenericMenu> IEditorWindowModel.onDisplayWindowMenu { get; set; }
     }
 }

@@ -101,7 +101,7 @@ namespace UnityEditor.Compilation
             var scriptAssembly = editorCompilation.CreateScriptAssembly(this);
 
 
-            compilationTask = new CompilationTask(new[] { scriptAssembly }, scriptAssembly.OutputDirectory, this,
+            compilationTask = new CompilationTask(new[] { scriptAssembly }, null, scriptAssembly.OutputDirectory, this,
                 EditorScriptCompilationOptions.BuildingEmpty, CompilationTaskOptions.StopOnFirstError, 1,
                 editorCompilation.ILPostProcessing, new CompilerFactory(new CompilerFactoryHelper()));
 
@@ -123,7 +123,7 @@ namespace UnityEditor.Compilation
 
             compilationTask.OnCompilationFinished += (assembly, messages) =>
             {
-                editorCompilation.InvokeAssemblyCompilationFinished(assemblyPath, messages);
+                editorCompilation.InvokeAssemblyCompilationFinished(assembly, messages, EditorScriptCompilationOptions.BuildingEmpty);
                 OnCompilationFinished(assembly, messages);
             };
 

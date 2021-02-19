@@ -16,6 +16,7 @@ using Object = UnityEngine.Object;
 using UnityEditor.Experimental.AssetImporters;
 using UnityEditorInternal;
 using Unity.CodeEditor;
+using UnityEditor.Profiling;
 
 namespace UnityEditor
 {
@@ -71,7 +72,7 @@ namespace UnityEditor
         [Serializable]
         class AssetPostProcessorAnalyticsData
         {
-            public double importActionId;
+            public string importActionId;
             public List<AssetPostProcessorMethodCallAnalyticsData> postProcessorCalls = new List<AssetPostProcessorMethodCallAnalyticsData>();
         }
 
@@ -104,7 +105,8 @@ namespace UnityEditor
 
             Profiler.BeginSample("SyncVS.PostprocessSyncProject");
             #pragma warning disable 618
-            if (ScriptEditorUtility.GetScriptEditorFromPath(CodeEditor.CurrentEditorInstallation) == ScriptEditorUtility.ScriptEditor.Other)
+            if (ScriptEditorUtility.GetScriptEditorFromPath(CodeEditor.CurrentEditorInstallation) == ScriptEditorUtility.ScriptEditor.Other
+                || ScriptEditorUtility.GetScriptEditorFromPath(CodeEditor.CurrentEditorInstallation) == ScriptEditorUtility.ScriptEditor.SystemDefault)
             {
                 CodeEditorProjectSync.PostprocessSyncProject(importedAssets, addedAssets, deletedAssets, movedAssets, movedFromPathAssets);
             }
@@ -222,6 +224,7 @@ namespace UnityEditor
         static string m_TextureProcessorsHashString = null;
         static string m_AudioProcessorsHashString = null;
         static string m_SpeedTreeProcessorsHashString = null;
+        static string m_PrefabProcessorsHashString = null;
 
         static Type[] GetCachedAssetPostprocessorClasses()
         {
@@ -235,7 +238,7 @@ namespace UnityEditor
         {
             m_ImportProcessors = new ArrayList();
             var analyticsEvent = new AssetPostProcessorAnalyticsData();
-            analyticsEvent.importActionId = AssetImporter.GetAtPath(pathName).GetImportStartTime();
+            analyticsEvent.importActionId = ((int)Math.Floor(AssetImporter.GetAtPath(pathName).GetImportStartTime() * 1000)).ToString();
             s_AnalyticsEventsStack.Push(analyticsEvent);
 
             // @TODO: This is just a temporary workaround for the import settings.
@@ -326,7 +329,7 @@ namespace UnityEditor
                         "OnPreprocessMaterialDescription"
                     });
                     uint version = inst.GetVersion();
-                    if (version != 0 && hasAnyPostprocessMethod)
+                    if (hasAnyPostprocessMethod)
                     {
                         versionsByType.Add(type.FullName, version);
                     }
@@ -466,7 +469,7 @@ namespace UnityEditor
                     bool hasPostProcessMethod = (type.GetMethod("OnPostprocessTexture", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) != null) ||
                         (type.GetMethod("OnPostprocessCubemap", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) != null);
                     uint version = inst.GetVersion();
-                    if (version != 0 && (hasPreProcessMethod || hasPostProcessMethod))
+                    if (hasPreProcessMethod || hasPostProcessMethod)
                     {
                         versionsByType.Add(type.FullName, version);
                     }
@@ -529,7 +532,7 @@ namespace UnityEditor
                     bool hasPreProcessMethod = type.GetMethod("OnPreprocessAudio", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) != null;
                     bool hasPostProcessMethod = type.GetMethod("OnPostprocessAudio", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) != null;
                     uint version = inst.GetVersion();
-                    if (version != 0 && (hasPreProcessMethod || hasPostProcessMethod))
+                    if (hasPreProcessMethod || hasPostProcessMethod)
                     {
                         versionsByType.Add(type.FullName, version);
                     }
@@ -564,6 +567,48 @@ namespace UnityEditor
         }
 
         [RequiredByNativeCode]
+        static string GetPrefabProcessorsHashString()
+        {
+            if (m_PrefabProcessorsHashString != null)
+                return m_PrefabProcessorsHashString;
+
+            var versionsByType = new SortedList<string, uint>();
+
+            foreach (var assetPostprocessorClass in GetCachedAssetPostprocessorClasses())
+            {
+                try
+                {
+                    var inst = Activator.CreateInstance(assetPostprocessorClass) as AssetPostprocessor;
+                    var type = inst.GetType();
+                    bool hasPostProcessMethod = type.GetMethod("OnPostprocessPrefab", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) != null;
+                    uint version = inst.GetVersion();
+                    if (version != 0 && hasPostProcessMethod)
+                    {
+                        versionsByType.Add(type.FullName, version);
+                    }
+                }
+                catch (MissingMethodException)
+                {
+                    LogPostProcessorMissingDefaultConstructor(assetPostprocessorClass);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e);
+                }
+            }
+
+            m_PrefabProcessorsHashString = BuildHashString(versionsByType);
+            return m_PrefabProcessorsHashString;
+        }
+
+        [RequiredByNativeCode]
+        static void PostprocessPrefab(GameObject prefabAssetRoot)
+        {
+            object[] args = { prefabAssetRoot };
+            CallPostProcessMethods("OnPostprocessPrefab", args);
+        }
+
+        [RequiredByNativeCode]
         static void PostprocessAssetbundleNameChanged(string assetPath, string prevoiusAssetBundleName, string newAssetBundleName)
         {
             object[] args = { assetPath, prevoiusAssetBundleName, newAssetBundleName };
@@ -592,7 +637,7 @@ namespace UnityEditor
                     bool hasPreProcessMethod = type.GetMethod("OnPreprocessSpeedTree", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) != null;
                     bool hasPostProcessMethod = type.GetMethod("OnPostprocessSpeedTree", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) != null;
                     uint version = inst.GetVersion();
-                    if (version != 0 && (hasPreProcessMethod || hasPostProcessMethod))
+                    if (hasPreProcessMethod || hasPostProcessMethod)
                     {
                         versionsByType.Add(type.FullName, version);
                     }
@@ -673,32 +718,24 @@ namespace UnityEditor
 
         static object InvokeMethod(MethodInfo method, object[] args)
         {
-            bool profile = Profiler.enabled;
-            if (profile)
-                Profiler.BeginSample(method.DeclaringType.FullName + "." + method.Name);
-
-            var res = method.Invoke(null, args);
-
-            if (profile)
-                Profiler.EndSample();
+            object res = null;
+            using (new EditorPerformanceTracker(method.DeclaringType.Name + "." + method.Name))
+            {
+                res = method.Invoke(null, args);
+            }
 
             return res;
         }
 
         static bool InvokeMethodIfAvailable(object target, string methodName, object[] args)
         {
-            bool profile = Profiler.enabled;
-
             MethodInfo method = target.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (method != null)
             {
-                if (profile)
-                    Profiler.BeginSample(target.GetType().FullName + "." + methodName);
-
-                method.Invoke(target, args);
-
-                if (profile)
-                    Profiler.EndSample();
+                using (new EditorPerformanceTracker(target.GetType().Name + "." + methodName))
+                {
+                    method.Invoke(target, args);
+                }
 
                 return true;
             }
@@ -707,18 +744,13 @@ namespace UnityEditor
 
         static bool InvokeMethodIfAvailable<T>(object target, string methodName, object[] args, ref T returnedObject) where T : class
         {
-            bool profile = Profiler.enabled;
-
             MethodInfo method = target.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (method != null)
             {
-                if (profile)
-                    Profiler.BeginSample(target.GetType().FullName + "." + methodName);
-
-                returnedObject = method.Invoke(target, args) as T;
-
-                if (profile)
-                    Profiler.EndSample();
+                using (new EditorPerformanceTracker(target.GetType().Name + "." + methodName))
+                {
+                    returnedObject = method.Invoke(target, args) as T;
+                }
 
                 return true;
             }

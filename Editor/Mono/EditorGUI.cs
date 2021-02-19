@@ -19,6 +19,7 @@ using UnityEditor.Build;
 using UnityEditor.StyleSheets;
 using UnityEditor.VersionControl;
 using UnityEngine.Internal;
+using VirtualTexturing = UnityEngine.Rendering.VirtualTexturing;
 
 namespace UnityEditor
 {
@@ -110,6 +111,7 @@ namespace UnityEditor
         internal const int kInspTitlebarIconWidth = 16;
         internal const int kInspTitlebarFoldoutIconWidth = 13;
         internal static readonly SVC<float> kWindowToolbarHeight = new SVC<float>("--window-toolbar-height", 21f);
+        internal const int kTabButtonHeight = 22;
         private const string kEnabledPropertyName = "m_Enabled";
         private const string k_MultiEditValueString = "<multi>";
         private const float kDropDownArrowMargin = 2;
@@ -178,11 +180,14 @@ namespace UnityEditor
         private static readonly Color s_MixedValueContentColor = new Color(1, 1, 1, 0.5f);
         private static Color s_MixedValueContentColorTemp = Color.white;
 
+        internal static SavedBool s_ShowRepaintDots = new SavedBool("ShowRepaintDots", true);
+
         static class Styles
         {
             public static Texture2D prefabOverlayAddedIcon = EditorGUIUtility.LoadIcon("PrefabOverlayAdded Icon");
             public static Texture2D prefabOverlayRemovedIcon = EditorGUIUtility.LoadIcon("PrefabOverlayRemoved Icon");
             public static readonly GUIStyle linkButton = "FloatFieldLinkButton";
+            public static Texture2D repaintDot = EditorGUIUtility.LoadIcon("RepaintDot");
         }
 
         internal static void BeginHandleMixedValueContentColor()
@@ -1690,9 +1695,7 @@ namespace UnityEditor
             if (Event.current.type == EventType.MouseUp && buttonRect.Contains(Event.current.mousePosition))
             {
                 s_RecycledEditor.text = text = "";
-                GUIUtility.keyboardControl = 0;
                 GUI.changed = true;
-                Event.current.Use();
             }
             text = DoTextField(s_RecycledEditor, id, textRect, text, showWithPopupArrow ? EditorStyles.toolbarSearchFieldPopup : EditorStyles.toolbarSearchField, null, out dummy, false, false, false);
             GUI.Button(buttonRect, GUIContent.none,
@@ -2090,7 +2093,7 @@ namespace UnityEditor
             // Every EditorWindow has its own keyboardControl state so we also need to
             // check if the current OS view has focus to determine if the control has actual key focus (gets the input)
             // and not just being a focused control in an unfocused window.
-            return (GUIUtility.keyboardControl == controlID && GUIView.current.hasFocus);
+            return (GUIUtility.keyboardControl == controlID && EditorGUIUtility.HasCurrentWindowKeyFocus());
         }
 
         internal static void DoNumberField(RecycledTextEditor editor, Rect position, Rect dragHotZone, int id, bool isDouble, ref double doubleVal, ref long longVal, string formatString, GUIStyle style, bool draggable, double dragSensitivity)
@@ -2254,7 +2257,7 @@ namespace UnityEditor
                 {
                     if (!s_DelayedTextEditor.IsEditingControl(id))
                     {
-                        if (value != str)
+                        if ((value != str) && (!showMixedValue || (showMixedValue && k_MultiEditValueString != str)))
                         {
                             GUI.changed = true;
                             value = str;
@@ -2530,7 +2533,15 @@ namespace UnityEditor
                         false
                     );
                 }
+            }
 
+            // Add copy/paste clipboard operations if available (the entries themselves
+            // will check for GUI enablement; e.g. Copy should be there even for disabled
+            // GUI but Paste should not).
+            ClipboardContextMenu.SetupPropertyCopyPaste(propertyWithPath, menu: pm, evt: null);
+
+            if (GUI.enabled)
+            {
                 // If property is an element in an array, show duplicate and delete menu options
                 if (property.propertyPath.LastIndexOf(']') == property.propertyPath.Length - 1)
                 {
@@ -4573,7 +4584,7 @@ namespace UnityEditor
                                 GUIUtility.keyboardControl = id;
 
                                 var names = new[] { L10n.Tr("Copy"), L10n.Tr("Paste") };
-                                var enabled = new[] {true, wasEnabled && ColorClipboard.HasColor()};
+                                var enabled = new[] {true, wasEnabled && Clipboard.hasColor};
                                 var currentView = GUIView.current;
 
                                 EditorUtility.DisplayCustomMenu(
@@ -4691,19 +4702,21 @@ namespace UnityEditor
                                 HandleUtility.Repaint();
                                 return ColorPicker.color;
                             case EventCommandNames.Copy:
-                                ColorClipboard.SetColor(value);
+                                Clipboard.colorValue = value;
                                 evt.Use();
                                 break;
 
                             case EventCommandNames.Paste:
-                                Color colorFromClipboard;
-                                if (ColorClipboard.TryGetColor(hdr, out colorFromClipboard))
+                                if (Clipboard.hasColor)
                                 {
+                                    Color pasted = Clipboard.colorValue;
+                                    if (!hdr && pasted.maxColorComponent > 1f)
+                                        pasted = pasted.RGBMultiplied(1f / pasted.maxColorComponent);
                                     // Do not change alpha if color field is not showing alpha
                                     if (!showAlpha)
-                                        colorFromClipboard.a = origColor.a;
+                                        pasted.a = origColor.a;
 
-                                    origColor = colorFromClipboard;
+                                    origColor = pasted;
 
                                     GUI.changed = true;
                                     evt.Use();
@@ -5468,11 +5481,9 @@ namespace UnityEditor
             Rect clickRect = position;
             if (!toggleOnLabelClick)
             {
-                clickRect = origPosition;
-                clickRect.width += style.padding.right;
+                clickRect.width = style.padding.left;
                 clickRect.x += indent;
             }
-
             switch (eventType)
             {
                 case EventType.MouseDown:
@@ -5606,7 +5617,7 @@ namespace UnityEditor
                         var barRect = new Rect(position);
                         barRect.width *= value;
                         if (barRect.width >= 1f)
-                            progressBarStyle.Draw(barRect, textOnBar ? content : GUIContent.none, mouseHover, false, false, false);
+                            progressBarStyle.Draw(barRect, GUIContent.none, mouseHover, false, false, false);
                     }
                     else if (value == -1.0f)
                     {
@@ -5620,8 +5631,22 @@ namespace UnityEditor
                         var barRect = new Rect(position.x + cursor + scale, position.y, barWidth, position.height);
                         progressBarStyle.Draw(barRect, GUIContent.none, mouseHover, false, false, false);
                     }
-
-                    progressBarTextStyle.Draw(position, !textOnBar ? content : GUIContent.none, mouseHover, false, false, false);
+                    var contentTextToDisplay = content;
+                    var contentWidth = progressBarTextStyle.CalcSize(contentTextToDisplay).x;
+                    if (contentWidth > position.width)
+                    {
+                        int numberOfVisibleCharacters = (int)((position.width / contentWidth) * content.text.Length);
+                        // we iterate in case we encounter a weird string like ________..............._________ (with big characters in the outside and small in the inside)
+                        int i = 0;
+                        do
+                        {
+                            int numberOfVisibleCharactersBySide = numberOfVisibleCharacters / 2 - 2 - i; //-2 to account for the ..., we reduce each iteration to fit
+                            contentTextToDisplay.text = content.text.Substring(0, numberOfVisibleCharactersBySide) + "..." + content.text.Substring(content.text.Length - numberOfVisibleCharactersBySide, numberOfVisibleCharactersBySide);
+                            ++i;
+                        }
+                        while (progressBarTextStyle.CalcSize(contentTextToDisplay).x > position.width);
+                    }
+                    progressBarTextStyle.Draw(position, contentTextToDisplay, mouseHover, false, false, false);
                     break;
             }
 
@@ -5782,6 +5807,15 @@ namespace UnityEditor
             return fieldPosition;
         }
 
+        internal static bool UseVTMaterial(Texture texture)
+        {
+            if (PlayerSettings.GetVirtualTexturingSupportEnabled() == false)
+                return false;
+            Texture2D tex2d = texture as Texture2D;
+            int tileSize = VirtualTexturing.EditorHelpers.tileSize;
+            return tex2d != null && tex2d.vtOnly && tex2d.width > tileSize && tex2d.height > tileSize;
+        }
+
         internal static Rect MultiFieldPrefixLabel(Rect totalPosition, int id, GUIContent label, int columns)
         {
             if (!LabelHasContent(label))
@@ -5863,7 +5897,8 @@ namespace UnityEditor
                 throw new NullReferenceException(error);
             }
 
-            Highlighter.HighlightIdentifier(totalPosition, property.propertyPath);
+            if (Highlighter.IsSearchingForIdentifier())
+                Highlighter.HighlightIdentifier(totalPosition, property.propertyPath);
 
             s_PropertyFieldTempContent.text = (label == null) ? property.localizedDisplayName : label.text; // no necessary to be translated.
             s_PropertyFieldTempContent.tooltip = isCollectingTooltips ? ((label == null) ? property.tooltip : label.tooltip) : null;
@@ -5921,6 +5956,29 @@ namespace UnityEditor
 
                 animatedColor.a *= GUI.backgroundColor.a;
                 GUI.backgroundColor = animatedColor;
+            }
+            else
+            {
+                Object target = property.serializedObject.targetObject;
+                GameObject go = PrefabUtility.GetGameObject(target);
+                if (go != null && go.scene.IsValid() && EditorSceneManager.IsPreviewScene(go.scene))
+                {
+                    var prefabStage = Experimental.SceneManagement.PrefabStageUtility.GetCurrentPrefabStage();
+                    if (prefabStage != null && prefabStage.mode == Experimental.SceneManagement.PrefabStage.Mode.InContext)
+                    {
+                        var propertyPath = property.propertyPath;
+                        ScriptableObject driver = prefabStage;
+                        if (
+                            (DrivenPropertyManagerInternal.IsDriving(driver, target, propertyPath))
+                            ||
+                            ((target is Transform || property.propertyType == SerializedPropertyType.Color) && DrivenPropertyManagerInternal.IsDrivingPartial(driver, target, propertyPath)))
+                        {
+                            GUI.enabled = false;
+                            if (isCollectingTooltips)
+                                s_PropertyFieldTempContent.tooltip = s_PrefabInContextPreviewValuesTooltip;
+                        }
+                    }
+                }
             }
 
             GUI.enabled &= property.editable;
@@ -5988,9 +6046,6 @@ namespace UnityEditor
 
         internal static void DrawOverrideBackground(Rect position, bool fixupRectForHeadersAndBackgrounds = false)
         {
-            if (Event.current.type != EventType.Repaint)
-                return;
-
             if (fixupRectForHeadersAndBackgrounds)
             {
                 // Tweaks to match the specifics of how the horizontal lines between components are drawn.
@@ -5998,17 +6053,17 @@ namespace UnityEditor
                 position.yMax += 1;
             }
 
-            Color oldColor = GUI.backgroundColor;
-            bool oldEnabled = GUI.enabled;
-            GUI.enabled = true;
+            DrawMarginLineForRect(position, k_OverrideMarginColor);
+        }
 
-            GUI.backgroundColor = k_OverrideMarginColor;
-            position.x = 0;
+        internal static void DrawMarginLineForRect(Rect position, Color color)
+        {
+            if (Event.current.type != EventType.Repaint)
+                return;
+
+            position.x = EditorGUIUtility.leftMarginCoord - Mathf.Max(0f, GUIClip.topmostRect.xMin);
             position.width = 2;
-            EditorStyles.overrideMargin.Draw(position, false, false, false, false);
-
-            GUI.enabled = oldEnabled;
-            GUI.backgroundColor = oldColor;
+            Graphics.DrawTexture(position, EditorGUIUtility.whiteTexture, new Rect(), 0, 0, 0, 0, color, guiTextureClipVerticallyMaterial);
         }
 
         private static SerializedProperty s_PendingPropertyKeyboardHandling = null;
@@ -6016,28 +6071,47 @@ namespace UnityEditor
 
         private static void DoPropertyFieldKeyboardHandling(SerializedProperty property)
         {
-            // Delete & Duplicate commands
-            if (Event.current.type == EventType.ExecuteCommand || Event.current.type == EventType.ValidateCommand)
-            {
-                if (GUIUtility.keyboardControl == EditorGUIUtility.s_LastControlID && (Event.current.commandName == EventCommandNames.Delete || Event.current.commandName == EventCommandNames.SoftDelete))
-                {
-                    if (Event.current.type == EventType.ExecuteCommand)
-                    {
-                        // Wait with deleting the property until the property stack is empty. See EndProperty.
-                        s_PendingPropertyDelete = property.Copy();
-                    }
-                    Event.current.Use();
-                }
-                if (GUIUtility.keyboardControl == EditorGUIUtility.s_LastControlID && Event.current.commandName == EventCommandNames.Duplicate)
-                {
-                    if (Event.current.type == EventType.ExecuteCommand)
-                    {
-                        property.DuplicateCommand();
-                    }
-                    Event.current.Use();
-                }
-            }
             s_PendingPropertyKeyboardHandling = null;
+
+            // Only interested in processing commands if our field has keyboard focus
+            if (GUIUtility.keyboardControl != EditorGUIUtility.s_LastControlID)
+                return;
+
+            var evt = Event.current;
+
+            // Only interested in validate/execute keyboard shortcut commands
+            if (evt.type != EventType.ExecuteCommand && evt.type != EventType.ValidateCommand)
+                return;
+
+            var isExecute = Event.current.type == EventType.ExecuteCommand;
+
+            // Delete
+            if (evt.commandName == EventCommandNames.Delete || evt.commandName == EventCommandNames.SoftDelete)
+            {
+                if (isExecute)
+                {
+                    // Wait with deleting the property until the property stack is empty. See EndProperty.
+                    s_PendingPropertyDelete = property.Copy();
+                }
+                evt.Use();
+            }
+            // Duplicate
+            if (evt.commandName == EventCommandNames.Duplicate)
+            {
+                if (isExecute)
+                    property.DuplicateCommand();
+                evt.Use();
+            }
+            // Copy & Paste
+            if (evt.commandName == EventCommandNames.Copy || evt.commandName == EventCommandNames.Paste)
+            {
+                ClipboardContextMenu.SetupPropertyCopyPaste(property, menu: null, evt: evt);
+            }
+        }
+
+        internal static void LayerMaskField(Rect position, SerializedProperty property, GUIContent label, GUIStyle style)
+        {
+            LayerMaskField(position, unchecked((uint)property.intValue), property, label, style);
         }
 
         // Make a field for layer masks.
@@ -6080,25 +6154,25 @@ namespace UnityEditor
         // Helper function for helping with debugging the editor
         internal static void ShowRepaints()
         {
-            if (Unsupported.IsDeveloperMode())
-            {
-                Color temp = GUI.backgroundColor;
-                GUI.backgroundColor = new Color(UnityEngine.Random.value, UnityEngine.Random.value, UnityEngine.Random.value, 1f);
-                var texture = EditorStyles.radioButton.normal.background;
-                var size = new Vector2(texture.width, texture.height);
-                GUI.Label(new Rect(Vector2.zero, EditorGUIUtility.PixelsToPoints(size)), string.Empty, EditorStyles.radioButton);
-                GUI.backgroundColor = temp;
-            }
+            if (!Unsupported.IsDeveloperMode() || !s_ShowRepaintDots)
+                return;
+
+            Color temp = GUI.color;
+            GUI.color = new Color(UnityEngine.Random.value * .6f + .4f, UnityEngine.Random.value * .6f + .4f, UnityEngine.Random.value * .6f + .4f, 1f);
+            var size = new Vector2(Styles.repaintDot.width, Styles.repaintDot.height);
+            GUI.Label(new Rect(Vector2.zero, EditorGUIUtility.PixelsToPoints(size)), Styles.repaintDot);
+            GUI.color = temp;
         }
 
         // Draws the alpha channel of a texture within a rectangle.
         internal static void DrawTextureAlphaInternal(Rect position, Texture image, ScaleMode scaleMode, float imageAspect, float mipLevel)
         {
-            DrawPreviewTextureInternal(position, image, alphaMaterial, scaleMode, imageAspect, mipLevel, ColorWriteMask.All);
+            var mat = UseVTMaterial(image) ? alphaVTMaterial : alphaMaterial;
+            DrawPreviewTextureInternal(position, image, mat, scaleMode, imageAspect, mipLevel, ColorWriteMask.All, 0);
         }
 
         // Draws texture transparently using the alpha channel.
-        internal static void DrawTextureTransparentInternal(Rect position, Texture image, ScaleMode scaleMode, float imageAspect, float mipLevel, ColorWriteMask colorWriteMask)
+        internal static void DrawTextureTransparentInternal(Rect position, Texture image, ScaleMode scaleMode, float imageAspect, float mipLevel, ColorWriteMask colorWriteMask, float exposure)
         {
             if (imageAspect == 0f && image == null)
             {
@@ -6111,7 +6185,10 @@ namespace UnityEditor
 
             DrawTransparencyCheckerTexture(position, scaleMode, imageAspect);
             if (image != null)
-                DrawPreviewTexture(position, image, transparentMaterial, scaleMode, imageAspect, mipLevel, colorWriteMask);
+            {
+                var mat = UseVTMaterial(image) ? transparentVTMaterial : transparentMaterial;
+                DrawPreviewTexture(position, image, mat, scaleMode, imageAspect, mipLevel, colorWriteMask, exposure);
+            }
         }
 
         internal static void DrawTransparencyCheckerTexture(Rect position, ScaleMode scaleMode, float imageAspect)
@@ -6133,7 +6210,7 @@ namespace UnityEditor
         }
 
         // Draws the texture within a rectangle.
-        internal static void DrawPreviewTextureInternal(Rect position, Texture image, Material mat, ScaleMode scaleMode, float imageAspect, float mipLevel, ColorWriteMask colorWriteMask)
+        internal static void DrawPreviewTextureInternal(Rect position, Texture image, Material mat, ScaleMode scaleMode, float imageAspect, float mipLevel, ColorWriteMask colorWriteMask, float exposure)
         {
             if (Event.current.type == EventType.Repaint)
             {
@@ -6152,9 +6229,11 @@ namespace UnityEditor
                     colorMask.a = 0;
 
                 if (mat == null)
-                    mat = GetMaterialForSpecialTexture(image, colorMaterial);
+                    mat = GetMaterialForSpecialTexture(image, UseVTMaterial(image) ? colorVTMaterial : colorMaterial);
+
                 mat.SetColor("_ColorMask", colorMask);
                 mat.SetFloat("_Mip", mipLevel);
+                mat.SetFloat("_Exposure", exposure);
 
                 RenderTexture rt = image as RenderTexture;
                 bool manualResolve = (rt != null) && rt.bindTextureMS;
@@ -6181,6 +6260,9 @@ namespace UnityEditor
                 }
                 Graphics.DrawTexture(screenRect, image, sourceRect, 0, 0, 0, 0, GUI.color, mat);
 
+                //Start streaming in content for the next preview draw calls. The first draw might not have texture content to render with.
+                //StreamTexture is called after the draw call because the VT stack might not have been created yet otherwise.
+                StreamTexture(image, mat, mipLevel);
 
                 if (manualResolve)
                 {
@@ -6189,9 +6271,59 @@ namespace UnityEditor
             }
         }
 
-        // This will return appriopriate material to use with the texture according to its usage mode
-        internal static Material GetMaterialForSpecialTexture(Texture t, Material defaultMat = null, bool normals2Linear = false)
+        internal static void StreamTexture(Texture texture, Material mat, float mipLevel)
         {
+            if (UseVTMaterial(texture))
+            {
+                const string stackName = "Stack";//keep in sync with preview shader stack name
+                int stackNameId = Shader.PropertyToID(stackName);
+                Texture2D t2d = texture as Texture2D;
+
+                int count = mat.shader.GetPropertyCount();
+                bool stackFound = false;
+                for (int i = 0; i < count; i++)
+                {
+                    if (mat.shader.GetPropertyType(i) == UnityEngine.Rendering.ShaderPropertyType.Texture)
+                    {
+                        string sName;
+                        int dummy;
+
+                        if (mat.shader.FindTextureStack(i, out sName, out dummy) && stackName.Equals(sName))
+                        {
+                            var tex = mat.GetTexture(mat.shader.GetPropertyName(i)) as Texture2D;
+                            if (tex == t2d)
+                            {
+                                stackFound = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                Debug.Assert(stackFound);
+                //Request a higher mipmap first to make sure we have (low res) data as soon as possible
+                const int fallbackResolution = 256;
+                int minDimension = Mathf.Min(texture.width, texture.height);
+                if (minDimension > fallbackResolution)
+                {
+                    float factor = (float)minDimension / (float)fallbackResolution;
+                    int fallbackMipLevel = (int)Math.Ceiling(Math.Log(factor, 2));
+
+                    if (fallbackMipLevel > (int)mipLevel)
+                        VirtualTexturing.System.RequestRegion(mat, stackNameId, new Rect(0, 0, 1, 1), fallbackMipLevel, 2); //make sure the 128x128 mip is also requested to always have a fallback. Needed for mini thumbnails
+                }
+
+                if (mipLevel >= 0) //otherwise we don't know what mip will be sampled in the shader
+                {
+                    VirtualTexturing.System.RequestRegion(mat, stackNameId, new Rect(0, 0, 1, 1), (int)mipLevel, 1);
+                }
+            }
+        }
+
+        // This will return appriopriate material to use with the texture according to its usage mode
+        internal static Material GetMaterialForSpecialTexture(Texture t, Material defaultMat = null, bool normals2Linear = false, bool useVTMaterialWhenPossible = true)
+        {
+            bool useVT = useVTMaterialWhenPossible && UseVTMaterial(t);
+
             // i am not sure WHY do we check that (i would guess this is api user error and exception make sense, not "return something")
             if (t == null) return null;
 
@@ -6205,11 +6337,12 @@ namespace UnityEditor
                 return lightmapFullHDRMaterial;
             else if (usage == TextureUsageMode.NormalmapDXT5nm || (usage == TextureUsageMode.NormalmapPlain && format == TextureFormat.BC5))
             {
-                normalmapMaterial.SetFloat("_ManualTex2Linear", normals2Linear ? 1.0f : 0.0f);
-                return normalmapMaterial;
+                var normalMat = useVT ? normalmapVTMaterial : normalmapMaterial;
+                normalMat.SetFloat("_ManualTex2Linear", normals2Linear ? 1.0f : 0.0f);
+                return normalMat;
             }
             else if (TextureUtil.IsAlphaOnlyTextureFormat(format))
-                return alphaMaterial;
+                return useVT ? alphaVTMaterial : alphaMaterial;
             return defaultMat;
         }
 
@@ -6235,24 +6368,41 @@ namespace UnityEditor
             return m;
         }
 
-        private static Material s_ColorMaterial, s_AlphaMaterial, s_TransparentMaterial, s_NormalmapMaterial;
+        private static Material s_ColorMaterial, s_ColorVTMaterial, s_AlphaMaterial, s_AlphaVTMaterial, s_TransparentMaterial, s_TransparentVTMaterial, s_NormalmapMaterial, s_NormalmapVTMaterial;
         private static Material s_LightmapRGBMMaterial, s_LightmapDoubleLDRMaterial, s_LightmapFullHDRMaterial;
+        private static Material s_GUITextureClipVertically;
 
         internal static Material colorMaterial
         {
             get { return GetPreviewMaterial(ref s_ColorMaterial, "Previews/PreviewColor2D.shader"); }
         }
+        internal static Material colorVTMaterial
+        {
+            get { return GetPreviewMaterial(ref s_ColorVTMaterial, "Previews/PreviewColor2DVT.shader"); }
+        }
         internal static Material alphaMaterial
         {
             get { return GetPreviewMaterial(ref s_AlphaMaterial, "Previews/PreviewAlpha.shader"); }
+        }
+        internal static Material alphaVTMaterial
+        {
+            get { return GetPreviewMaterial(ref s_AlphaVTMaterial, "Previews/PreviewAlphaVT.shader"); }
         }
         internal static Material transparentMaterial
         {
             get { return GetPreviewMaterial(ref s_TransparentMaterial, "Previews/PreviewTransparent.shader"); }
         }
+        internal static Material transparentVTMaterial
+        {
+            get { return GetPreviewMaterial(ref s_TransparentVTMaterial, "Previews/PreviewTransparentVT.shader"); }
+        }
         internal static Material normalmapMaterial
         {
             get { return GetPreviewMaterial(ref s_NormalmapMaterial, "Previews/PreviewEncodedNormals.shader"); }
+        }
+        internal static Material normalmapVTMaterial
+        {
+            get { return GetPreviewMaterial(ref s_NormalmapVTMaterial, "Previews/PreviewEncodedNormalsVT.shader"); }
         }
         internal static Material lightmapRGBMMaterial
         {
@@ -6265,6 +6415,10 @@ namespace UnityEditor
         internal static Material lightmapFullHDRMaterial
         {
             get { return GetPreviewMaterial(ref s_LightmapFullHDRMaterial, "Previews/PreviewEncodedLightmapFullHDR.shader"); }
+        }
+        internal static Material guiTextureClipVerticallyMaterial
+        {
+            get { return GetPreviewMaterial(ref s_GUITextureClipVertically, "Inspectors/Internal-GUITextureClipVertically.shader"); }
         }
 
         private static void SetExpandedRecurse(SerializedProperty property, bool expanded)
@@ -6296,19 +6450,21 @@ namespace UnityEditor
             if (type == SerializedPropertyType.Vector3 || type == SerializedPropertyType.Vector2 || type == SerializedPropertyType.Vector4 ||
                 type == SerializedPropertyType.Vector3Int || type == SerializedPropertyType.Vector2Int)
             {
-                return (!LabelHasContent(label) || EditorGUIUtility.wideMode ? 0f : kStructHeaderLineHeight) + kSingleLineHeight + kVerticalSpacingMultiField;
+                return (!LabelHasContent(label) || EditorGUIUtility.wideMode ? 0f : kStructHeaderLineHeight + kVerticalSpacingMultiField) +
+                    kSingleLineHeight;
             }
 
             if (type == SerializedPropertyType.Rect || type == SerializedPropertyType.RectInt)
             {
-                return (!LabelHasContent(label) || EditorGUIUtility.wideMode ? 0f : kStructHeaderLineHeight) + kSingleLineHeight * 2 + kVerticalSpacingMultiField * 2;
+                return (!LabelHasContent(label) || EditorGUIUtility.wideMode ? 0f : kStructHeaderLineHeight + kVerticalSpacingMultiField) +
+                    kSingleLineHeight * 2 + kVerticalSpacingMultiField;
             }
 
             // Bounds field has label on its own line even in wide mode because the words "center" and "extends"
             // would otherwise eat too much of the label space.
             if (type == SerializedPropertyType.Bounds || type == SerializedPropertyType.BoundsInt)
             {
-                return (!LabelHasContent(label) ? 0f : kStructHeaderLineHeight) + kSingleLineHeight * 2 + kVerticalSpacingMultiField * 2;
+                return (!LabelHasContent(label) ? 0f : kStructHeaderLineHeight + kVerticalSpacingMultiField) + kSingleLineHeight * 2;
             }
 
             return kSingleLineHeight;
@@ -6325,7 +6481,7 @@ namespace UnityEditor
             return ScriptAttributeUtility.GetHandler(property).CanCacheInspectorGUI(property);
         }
 
-        internal static bool HasVisibleChildFields(SerializedProperty property)
+        internal static bool HasVisibleChildFields(SerializedProperty property, bool isUIElements = false)
         {
             switch (property.propertyType)
             {
@@ -6339,6 +6495,9 @@ namespace UnityEditor
                 case SerializedPropertyType.BoundsInt:
                     return false;
             }
+
+            if (!isUIElements && PropertyHandler.IsNonStringArray(property)) return false;
+
             return property.hasVisibleChildren;
         }
 
@@ -6766,9 +6925,9 @@ namespace UnityEditor
         }
 
         // Draws texture transparently using the alpha channel.
-        public static void DrawTextureTransparent(Rect position, Texture image, [DefaultValue("ScaleMode.StretchToFill")] ScaleMode scaleMode, [DefaultValue("0")] float imageAspect, [DefaultValue("-1")] float mipLevel, [DefaultValue("ColorWriteMask.All")] ColorWriteMask colorWriteMask)
+        public static void DrawTextureTransparent(Rect position, Texture image, [DefaultValue("ScaleMode.StretchToFill")] ScaleMode scaleMode, [DefaultValue("0")] float imageAspect, [DefaultValue("-1")] float mipLevel, [DefaultValue("ColorWriteMask.All")] ColorWriteMask colorWriteMask, [DefaultValue("0")] float exposure)
         {
-            DrawTextureTransparentInternal(position, image, scaleMode, imageAspect, mipLevel, colorWriteMask);
+            DrawTextureTransparentInternal(position, image, scaleMode, imageAspect, mipLevel, colorWriteMask, exposure);
         }
 
         [ExcludeFromDocs]
@@ -6795,11 +6954,23 @@ namespace UnityEditor
             DrawTextureTransparent(position, image, scaleMode, imageAspect, mipLevel, ColorWriteMask.All);
         }
 
+        [ExcludeFromDocs]
+        public static void DrawTextureTransparent(Rect position, Texture image, ScaleMode scaleMode, float imageAspect, float mipLevel, ColorWriteMask colorWriteMask)
+        {
+            DrawTextureTransparent(position, image, scaleMode, imageAspect, mipLevel, colorWriteMask, 0);
+        }
+
         // Draws the texture within a rectangle.
         public static void DrawPreviewTexture(Rect position, Texture image, [DefaultValue("null")] Material mat, [DefaultValue("ScaleMode.StretchToFill")] ScaleMode scaleMode,
-            [DefaultValue("0")] float imageAspect, [DefaultValue("-1")] float mipLevel, [DefaultValue("ColorWriteMask.All")] ColorWriteMask colorWriteMask)
+            [DefaultValue("0")] float imageAspect, [DefaultValue("-1")] float mipLevel, [DefaultValue("ColorWriteMask.All")] ColorWriteMask colorWriteMask, [DefaultValue("0")] float exposure)
         {
-            DrawPreviewTextureInternal(position, image, mat, scaleMode, imageAspect, mipLevel, colorWriteMask);
+            DrawPreviewTextureInternal(position, image, mat, scaleMode, imageAspect, mipLevel, colorWriteMask, exposure);
+        }
+
+        [ExcludeFromDocs]
+        public static void DrawPreviewTexture(Rect position, Texture image, Material mat, ScaleMode scaleMode, float imageAspect, float mipLevel, ColorWriteMask colorWriteMask)
+        {
+            DrawPreviewTexture(position, image, mat, scaleMode, imageAspect, mipLevel, colorWriteMask, 0);
         }
 
         [ExcludeFromDocs]
@@ -7676,7 +7847,7 @@ namespace UnityEditor
             return PropertyFieldInternal(position, property, label, includeChildren);
         }
 
-        static class EnumNamesCache
+        internal static class EnumNamesCache
         {
             static Dictionary<Type, GUIContent[]> s_EnumTypeLocalizedGUIContents = new Dictionary<Type, GUIContent[]>();
             static Dictionary<int, GUIContent[]> s_SerializedPropertyEnumLocalizedGUIContents = new Dictionary<int, GUIContent[]>();
@@ -7692,7 +7863,7 @@ namespace UnityEditor
                 else
                 {
                     // Build localized data and add to cache
-                    using (new Localization.Editor.LocalizationGroup(enumType))
+                    using (new LocalizationGroup(enumType))
                     {
                         result = EditorGUIUtility.TrTempContent(enumData.displayNames, enumData.tooltip);
                         s_EnumTypeLocalizedGUIContents[enumType] = result;
@@ -7703,15 +7874,21 @@ namespace UnityEditor
 
             internal static GUIContent[] GetEnumLocalizedGUIContents(SerializedProperty property)
             {
-                var propertyHash = property.hashCodeForPropertyPath;
+                if (property.serializedObject.targetObject == null)
+                    return EditorGUIUtility.TempContent(property.enumLocalizedDisplayNames);
+
+                var propertyHash = property.hashCodeForPropertyPathWithoutArrayIndex;
+                var typeHash = property.serializedObject.targetObject.GetType().GetHashCode();
+                var hashCode = typeHash ^ propertyHash;
                 GUIContent[] result;
-                if (s_SerializedPropertyEnumLocalizedGUIContents.TryGetValue(propertyHash, out result))
+
+                if (s_SerializedPropertyEnumLocalizedGUIContents.TryGetValue(hashCode, out result))
                 {
                     return result;
                 }
 
                 result = EditorGUIUtility.TempContent(property.enumLocalizedDisplayNames);
-                s_SerializedPropertyEnumLocalizedGUIContents[propertyHash] = result;
+                s_SerializedPropertyEnumLocalizedGUIContents[hashCode] = result;
                 return result;
             }
 
@@ -7805,7 +7982,6 @@ namespace UnityEditor
         static GUIStyle s_TabFirst;
         static GUIStyle s_TabMiddle;
         static GUIStyle s_TabLast;
-        const float kTabButtonHeight = 22;
 
         [ExcludeFromDocs]
         public static bool Foldout(bool foldout, string content)
@@ -9246,7 +9422,7 @@ namespace UnityEditor
             return EditorGUI.ColorField(r, label, value);
         }
 
-        #pragma warning disable 612
+#pragma warning disable 612
         [Obsolete("Use EditorGUILayout.ColorField(GUIContent label, Color value, bool showEyedropper, bool showAlpha, bool hdr, params GUILayoutOption[] options)")]
         public static Color ColorField(
             GUIContent label, Color value, bool showEyedropper, bool showAlpha, bool hdr, ColorPickerHDRConfig hdrConfig, params GUILayoutOption[] options
@@ -9255,7 +9431,7 @@ namespace UnityEditor
             return ColorField(label, value, showEyedropper, showAlpha, hdr);
         }
 
-        #pragma warning restore 612
+#pragma warning restore 612
 
         public static Color ColorField(GUIContent label, Color value, bool showEyedropper, bool showAlpha, bool hdr, params GUILayoutOption[] options)
         {
@@ -9354,7 +9530,7 @@ namespace UnityEditor
             EditorGUI.InspectorTitlebar(GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.inspectorTitlebar), targetObjs);
         }
 
-        // Make an foldout with a toggle and title
+        // Make a foldout with a toggle and title
         internal static bool ToggleTitlebar(bool foldout, GUIContent label, ref bool toggleValue)
         {
             return EditorGUI.ToggleTitlebar(GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.inspectorTitlebar), label, foldout, ref toggleValue);
@@ -10017,7 +10193,7 @@ namespace UnityEditor
             float tabWidth = rect.width / tabCount;
             int left = Mathf.RoundToInt(tabIndex * tabWidth);
             int right = Mathf.RoundToInt((tabIndex + 1) * tabWidth);
-            return new Rect(rect.x + left, rect.y, right - left, kTabButtonHeight);
+            return new Rect(rect.x + left, rect.y, right - left, EditorGUI.kTabButtonHeight);
         }
 
         internal static int BeginPlatformGrouping(BuildPlatform[] platforms, GUIContent defaultTab, GUIStyle style)
@@ -10072,7 +10248,7 @@ namespace UnityEditor
             }
 
             // GUILayout.Space doesn't expand to available width, so use GetRect instead
-            GUILayoutUtility.GetRect(10, kTabButtonHeight);
+            GUILayoutUtility.GetRect(10, EditorGUI.kTabButtonHeight);
 
             GUI.enabled = tempEnabled;
 

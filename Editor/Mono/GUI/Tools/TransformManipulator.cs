@@ -103,13 +103,18 @@ namespace UnityEditor
                 scaleDelta = refAlignment * scaleDelta;
                 scaleDelta = Vector3.Scale(scaleDelta, refAlignment * Vector3.one);
 
+                var applySmartRounding = Tools.current != Tool.Rect;
+
                 if (preferRectResize)
                 {
                     if (rectTransform != null)
                     {
                         Vector2 newSizeDelta = sizeDelta + Vector2.Scale(rect.size, scaleDelta) - rect.size;
-                        newSizeDelta.x = MathUtils.RoundBasedOnMinimumDifference(newSizeDelta.x, minDifference.x);
-                        newSizeDelta.y = MathUtils.RoundBasedOnMinimumDifference(newSizeDelta.y, minDifference.y);
+                        if (applySmartRounding)
+                        {
+                            newSizeDelta.x = MathUtils.RoundBasedOnMinimumDifference(newSizeDelta.x, minDifference.x);
+                            newSizeDelta.y = MathUtils.RoundBasedOnMinimumDifference(newSizeDelta.y, minDifference.y);
+                        }
                         rectTransform.sizeDelta = newSizeDelta;
                         if (rectTransform.drivenByObject != null)
                             RectTransform.SendReapplyDrivenProperties(rectTransform);
@@ -126,9 +131,12 @@ namespace UnityEditor
                     }
                 }
 
-                scaleDelta.x = MathUtils.RoundBasedOnMinimumDifference(scaleDelta.x, minDifference.x);
-                scaleDelta.y = MathUtils.RoundBasedOnMinimumDifference(scaleDelta.y, minDifference.y);
-                scaleDelta.z = MathUtils.RoundBasedOnMinimumDifference(scaleDelta.z, minDifference.z);
+                if (applySmartRounding)
+                {
+                    scaleDelta.x = MathUtils.RoundBasedOnMinimumDifference(scaleDelta.x, minDifference.x);
+                    scaleDelta.y = MathUtils.RoundBasedOnMinimumDifference(scaleDelta.y, minDifference.y);
+                    scaleDelta.z = MathUtils.RoundBasedOnMinimumDifference(scaleDelta.z, minDifference.z);
+                }
                 SetScaleValue(Vector3.Scale(scale, scaleDelta));
             }
 
@@ -149,7 +157,7 @@ namespace UnityEditor
                 }
 
                 //If we are snapping, disable the smart rounding. If not the case, the transform will have the wrong snap value based on distance to screen.
-                applySmartRounding &= !(EditorSnapSettings.incrementalSnapActive || EditorSnapSettings.gridSnapActive);
+                applySmartRounding &= !(EditorSnapSettings.incrementalSnapActive || EditorSnapSettings.gridSnapActive || EditorSnapSettings.vertexSnapActive);
 
                 bool zeroXDelta = false;
                 bool zeroYDelta = false;
@@ -207,32 +215,6 @@ namespace UnityEditor
                     if (rectTransform.drivenByObject != null)
                         RectTransform.SendReapplyDrivenProperties(rectTransform);
                 }
-            }
-
-            public void DebugAlignment(Quaternion targetRotation)
-            {
-                Quaternion refAlignment = Quaternion.identity;
-                if (!TransformManipulator.individualSpace)
-                    refAlignment = GetRefAlignment(targetRotation, rotation);
-
-                Vector3 dir;
-                Vector3 pos = transform.position;
-                float size = HandleUtility.GetHandleSize(pos) * 0.25f;
-                Color oldColor = Handles.color;
-
-                Handles.color = Color.red;
-                dir = rotation * refAlignment * Vector3.right * size;
-                Handles.DrawLine(pos - dir, pos + dir);
-
-                Handles.color = Color.green;
-                dir = rotation * refAlignment * Vector3.up * size;
-                Handles.DrawLine(pos - dir, pos + dir);
-
-                Handles.color = Color.blue;
-                dir = rotation * refAlignment * Vector3.forward * size;
-                Handles.DrawLine(pos - dir, pos + dir);
-
-                Handles.color = oldColor;
             }
         }
 
@@ -334,10 +316,7 @@ namespace UnityEditor
                 var cur = s_MouseDownState[i];
                 undoObjects[i] = cur.transform;
             }
-            if (AnimationMode.InAnimationMode())
-                Undo.RecordObjects(undoObjects, "Scale");
-            else
-                Undo.RegisterCompleteObjectUndo(undoObjects, "Scale");
+            Undo.RecordObjects(undoObjects, "Scale");
 
             Vector3 point = Tools.handlePosition;
             for (int i = 0; i < s_MouseDownState.Length; i++)
@@ -394,10 +373,7 @@ namespace UnityEditor
                 var cur = s_MouseDownState[i];
                 undoObjects[i] = (cur.rectTransform != null ? (Object)cur.rectTransform : (Object)cur.transform);
             }
-            if (AnimationMode.InAnimationMode())
-                Undo.RecordObjects(undoObjects, "Move");
-            else
-                Undo.RegisterCompleteObjectUndo(undoObjects, "Move");
+            Undo.RecordObjects(undoObjects, "Move");
 
             if (s_MouseDownState.Length > 0)
             {
@@ -414,14 +390,6 @@ namespace UnityEditor
         public static bool HandleHasMoved(Vector3 position)
         {
             return position != s_PreviousHandlePosition;
-        }
-
-        public static void DebugAlignment(Quaternion targetRotation)
-        {
-            if (s_MouseDownState == null)
-                return;
-            for (int i = 0; i < s_MouseDownState.Length; i++)
-                s_MouseDownState[i].DebugAlignment(targetRotation);
         }
     }
 } // namespace

@@ -20,7 +20,7 @@ namespace UnityEngine
         [ThreadAndSerializationSafe]
         internal static extern void Internal_Log(LogType level, LogOption options, string msg, Object obj);
         [ThreadAndSerializationSafe]
-        internal static extern void Internal_LogException(Exception exception, Object obj);
+        internal static extern void Internal_LogException(Exception ex, Object obj);
     }
 
     [NativeHeader("Runtime/Export/Debug/Debug.bindings.h")]
@@ -98,6 +98,9 @@ namespace UnityEngine
 
         // Breaks into the attached debugger, if present
         public static extern void DebugBreak();
+
+        [ThreadSafe]
+        public static unsafe extern int ExtractStackTraceNoAlloc(byte* buffer, int bufferMax, string projectFolder);
 
         // Logs /message/ to the Unity Console.
         public static void Log(object message) { unityLogger.Log(LogType.Log, message); }

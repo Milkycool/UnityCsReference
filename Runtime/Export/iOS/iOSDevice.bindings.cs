@@ -63,6 +63,7 @@ namespace UnityEngine.iOS
         iPhone11ProMax  = 50,
         iPodTouch7Gen   = 51,
         iPad7Gen        = 52,
+        iPhoneSE2Gen    = 53,
 
         iPhoneUnknown       = 10001,
         iPadUnknown         = 10002,
@@ -100,24 +101,37 @@ namespace UnityEngine.iOS
             get;
         }
 
+        // please note that we check both advertisingIdentifier/advertisingTrackingEnabled
+        //   usage in scripts to decide if we should enable UNITY_USES_IAD macro (i.e. code that uses iAD and related things)
+        // that's why it is VERY important that you use private extern functions instead of properties in internal/implementation code
+        // as another caveat, apple seems to grep app strings naively when checking for usages of this api
+        //   poterntially finding UnityAdvertisingIdentifier/IsAdvertisingTrackingEnabled
+        // thats why we renamed these functions to be less like apple api
+
         [NativeConditional("PLATFORM_IOS || PLATFORM_TVOS")]
-        [FreeFunction("UnityAdvertisingIdentifier")]
-        extern private static string GetAdvertisingIdentifier();
+        [FreeFunction("UnityAdIdentifier")]
+        extern private static string GetAdIdentifier();
 
         public static string advertisingIdentifier
         {
             get
             {
-                string advertisingId = GetAdvertisingIdentifier();
-                Application.InvokeOnAdvertisingIdentifierCallback(advertisingId, advertisingTrackingEnabled);
+                string advertisingId = GetAdIdentifier();
+                Application.InvokeOnAdvertisingIdentifierCallback(advertisingId, IsAdTrackingEnabled());
                 return advertisingId;
             }
         }
 
-        extern public static bool advertisingTrackingEnabled
+        [NativeConditional("PLATFORM_IOS || PLATFORM_TVOS")]
+        [FreeFunction("IOSScripting::IsAdTrackingEnabled")]
+        extern private static bool IsAdTrackingEnabled();
+
+        public static bool advertisingTrackingEnabled
         {
-            [NativeConditional("PLATFORM_IOS || PLATFORM_TVOS")]
-            [FreeFunction("IOSScripting::IsAdvertisingTrackingEnabled")] get;
+            get
+            {
+                return IsAdTrackingEnabled();
+            }
         }
 
         extern public static bool hideHomeButton

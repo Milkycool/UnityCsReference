@@ -205,22 +205,6 @@ namespace UnityEditor.Connect
                         {
                             response.Exception = new InvalidOperationException(string.Format("Error from server: {0}", json["message"].AsString()));
                         }
-                        else if (json.ContainsKey("location") && !json["location"].IsNull())
-                        {
-                            UnityConnectConsentView consentView = UnityConnectConsentView.ShowUnityConnectConsentView(json["location"].AsString());
-                            if (!string.IsNullOrEmpty(consentView.Code))
-                            {
-                                response.AuthCode = consentView.Code;
-                            }
-                            else if (!string.IsNullOrEmpty(consentView.Error))
-                            {
-                                response.Exception = new InvalidOperationException(string.Format("Error from server: {0}", consentView.Error));
-                            }
-                            else
-                            {
-                                response.Exception = new InvalidOperationException("Consent Windows was closed unexpected.");
-                            }
-                        }
                         else
                         {
                             response.Exception = new InvalidOperationException("Unexpected response from server.");
@@ -315,6 +299,7 @@ namespace UnityEditor.Connect
         [Obsolete]
         public void GoToHub(string page)
         {
+            // Old CEF approach to go to the hub was removed. Keeping method for legacy.
         }
 
         public void UnbindProject()
@@ -403,7 +388,6 @@ namespace UnityEditor.Connect
         static UnityConnect()
         {
             s_Instance = new UnityConnect();
-            JSProxyMgr.GetInstance().AddGlobalObject("unity/connect", s_Instance);
         }
 
         private static void OnStateChanged()
@@ -727,6 +711,13 @@ namespace UnityEditor.Connect
         public UserInfo userInfo
         {
             get { return GetUserInfo_Internal(); }
+        }
+
+        [NativeMethod("GetIsUserInfoReady")]
+        private static extern bool GetIsUserInfoReady_Internal();
+        public bool isUserInfoReady
+        {
+            get { return GetIsUserInfoReady_Internal(); }
         }
 
         [NativeMethod("GetProjectInfo")]

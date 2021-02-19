@@ -56,29 +56,34 @@ namespace UnityEngine.tvOS
             get { return tvOSVendorIdentifier; }
         }
 
+        // please note that we check both advertisingIdentifier/advertisingTrackingEnabled
+        //   usage in scripts to decide if we should enable UNITY_USES_IAD macro (i.e. code that uses iAD and related things)
+        // that's why it is VERY important that you use private extern functions instead of properties in internal/implementation code
+        // as another caveat, apple seems to grep app strings naively when checking for usages of this api
+        //   poterntially finding UnityAdvertisingIdentifier/IsAdvertisingTrackingEnabled
+        // thats why we renamed these functions to be less like apple api
+
         [NativeConditional("PLATFORM_TVOS")]
-        [FreeFunction("UnityAdvertisingIdentifier")]
-        extern private static string GettvOSAdvertisingIdentifier();
+        [FreeFunction("UnityAdIdentifier")]
+        extern private static string GetTVOSAdIdentifier();
 
         public static string advertisingIdentifier
         {
             get
             {
-                string advertisingId = GettvOSAdvertisingIdentifier();
-                Application.InvokeOnAdvertisingIdentifierCallback(advertisingId, advertisingTrackingEnabled);
+                string advertisingId = GetTVOSAdIdentifier();
+                Application.InvokeOnAdvertisingIdentifierCallback(advertisingId, IsTVOSAdTrackingEnabled());
                 return advertisingId;
             }
         }
 
-        extern private static bool tvOSadvertisingTrackingEnabled
-        {
-            [NativeConditional("PLATFORM_TVOS")]
-            [FreeFunction("IOSScripting::IsAdvertisingTrackingEnabled")] get;
-        }
+        [NativeConditional("PLATFORM_TVOS")]
+        [FreeFunction("IOSScripting::IsAdTrackingEnabled")]
+        extern private static bool IsTVOSAdTrackingEnabled();
 
         public static bool advertisingTrackingEnabled
         {
-            get { return tvOSadvertisingTrackingEnabled; }
+            get { return IsTVOSAdTrackingEnabled(); }
         }
 
 

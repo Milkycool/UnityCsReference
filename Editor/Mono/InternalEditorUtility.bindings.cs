@@ -40,7 +40,6 @@ namespace UnityEditorInternal
     [NativeHeader("Editor/Mono/MonoEditorUtility.h")]
     [NativeHeader("Editor/Platform/Interface/ColorPicker.h")]
     [NativeHeader("Editor/Platform/Interface/EditorUtility.h")]
-    [NativeHeader("Editor/Platform/Interface/EditorWindows.h")]
     [NativeHeader("Editor/Src/Application/Application.h")]
     [NativeHeader("Modules/AssetDatabase/Editor/Public/AssetDatabase.h")]
     [NativeHeader("Modules/AssetDatabase/Editor/Public/AssetDatabaseDeprecated.h")]
@@ -725,37 +724,28 @@ namespace UnityEditorInternal
 
         private static Bounds GetLocalBounds(GameObject gameObject)
         {
-            RectTransform rectTransform = gameObject.GetComponent<RectTransform>();
-            if (rectTransform)
-            {
-                return new Bounds((Vector3)rectTransform.rect.center, rectTransform.rect.size);
-            }
+            if (gameObject.TryGetComponent(out RectTransform rectTransform))
+                return new Bounds(rectTransform.rect.center, rectTransform.rect.size);
 
-            Renderer renderer = gameObject.GetComponent<Renderer>();
-            if (renderer is MeshRenderer)
+            // Account for case where there is a mesh filter but no renderer
+            if (gameObject.TryGetComponent(out MeshFilter filter) && filter.sharedMesh != null)
+                return filter.sharedMesh.bounds;
+
+            if (gameObject.TryGetComponent(out Renderer renderer))
             {
-                MeshFilter filter = renderer.GetComponent<MeshFilter>();
-                if (filter != null && filter.sharedMesh != null)
-                    return filter.sharedMesh.bounds;
-            }
-            if (renderer is SpriteRenderer)
-            {
-                return ((SpriteRenderer)renderer).GetSpriteBounds();
-            }
-            if (renderer is SpriteMask)
-            {
-                return ((SpriteMask)renderer).GetSpriteBounds();
-            }
-            if (renderer is UnityEngine.U2D.SpriteShapeRenderer)
-            {
-                return ((UnityEngine.U2D.SpriteShapeRenderer)renderer).GetLocalAABB();
-            }
-            if (renderer is UnityEngine.Tilemaps.TilemapRenderer)
-            {
-                UnityEngine.Tilemaps.Tilemap tilemap = renderer.GetComponent<UnityEngine.Tilemaps.Tilemap>();
-                if (tilemap != null)
+                if (renderer is SpriteRenderer)
+                    return ((SpriteRenderer)renderer).GetSpriteBounds();
+
+                if (renderer is SpriteMask)
+                    return ((SpriteMask)renderer).GetSpriteBounds();
+
+                if (renderer is UnityEngine.U2D.SpriteShapeRenderer)
+                    return ((UnityEngine.U2D.SpriteShapeRenderer)renderer).GetLocalAABB();
+
+                if (renderer is UnityEngine.Tilemaps.TilemapRenderer && renderer.TryGetComponent(out UnityEngine.Tilemaps.Tilemap tilemap))
                     return tilemap.localBounds;
             }
+
             return new Bounds(Vector3.zero, Vector3.zero);
         }
 
@@ -835,9 +825,6 @@ namespace UnityEditorInternal
         [StaticAccessor("UnityExtensions::Get()", StaticAccessorType.Dot)]
         [NativeMethod("IsCompatibleWithEditor")]
         extern internal static bool IsUnityExtensionCompatibleWithEditor(BuildTargetGroup targetGroup, BuildTarget target, string path);
-
-        [FreeFunction("GetAllEditorModuleNames")]
-        extern internal static string[] GetEditorModuleDllNames();
 
         [FreeFunction(IsThreadSafe = true)]
         extern public static bool CurrentThreadIsMainThread();

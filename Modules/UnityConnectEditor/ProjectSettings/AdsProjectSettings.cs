@@ -5,12 +5,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEditor.Advertisements;
 using UnityEngine.Networking;
-using UnityEditorInternal;
 
 namespace UnityEditor.Connect
 {
@@ -48,17 +46,9 @@ namespace UnityEditor.Connect
         const string k_AppleGameIdName = "AppleGameId";
         const string k_AndroidGameIdName = "AndroidGameId";
 
-        const string k_GameIdApiUrl = "/unity/games";
-        const string k_JsonAppleGameId = "iOSGameKey";
-        const string k_JsonAndroidGameId = "androidGameKey";
-
         VisualElement m_GoToDashboard;
         Toggle m_MainServiceToggle;
         bool m_EventHandlerInitialized;
-        UnityWebRequest m_CurrentWebRequest;
-
-        string m_AppleGameId;
-        string m_AndroidGameId;
 
         EnabledState m_EnabledState;
         DisabledState m_DisabledState;
@@ -84,9 +74,6 @@ namespace UnityEditor.Connect
             m_StateMachine.AddEvent(AdsEvent.Disabling);
             m_EnabledState = new EnabledState(m_StateMachine, this);
             m_DisabledState = new DisabledState(m_StateMachine, this);
-            m_AppleGameId = AdvertisementSettings.GetGameId(RuntimePlatform.IPhonePlayer);
-            m_AndroidGameId = AdvertisementSettings.GetGameId(RuntimePlatform.Android);
-
             m_StateMachine.AddState(m_EnabledState);
             m_StateMachine.AddState(m_DisabledState);
         }
@@ -107,13 +94,8 @@ namespace UnityEditor.Connect
         void SetupServiceToggle(SingleService singleService)
         {
             m_MainServiceToggle.SetProperty(k_ServiceNameProperty, singleService.name);
-            m_MainServiceToggle.SetValueWithoutNotify(singleService.IsServiceEnabled());
-            SetupServiceToggleLabel(m_MainServiceToggle, singleService.IsServiceEnabled());
             m_MainServiceToggle.SetEnabled(false);
-            if (m_GoToDashboard != null)
-            {
-                m_GoToDashboard.style.display = (singleService.IsServiceEnabled()) ? DisplayStyle.Flex : DisplayStyle.None;
-            }
+            UpdateServiceToggleAndDashboardLink(singleService.IsServiceEnabled());
 
             if (singleService.displayToggle)
             {
@@ -121,24 +103,10 @@ namespace UnityEditor.Connect
                 {
                     if (currentUserPermission != UserRole.Owner && currentUserPermission != UserRole.Manager)
                     {
-                        m_MainServiceToggle.SetValueWithoutNotify(evt.previousValue);
-                        SetupServiceToggleLabel(m_MainServiceToggle, evt.previousValue);
+                        UpdateServiceToggleAndDashboardLink(evt.previousValue);
                         return;
                     }
                     singleService.EnableService(evt.newValue);
-                    if (m_GoToDashboard != null)
-                    {
-                        m_GoToDashboard.style.display = (evt.newValue) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
-
-                    // When turning off the service, the game ids must be put to null and refetched when reenabled, but when entering the enabled state.
-                    SetupServiceToggleLabel(m_MainServiceToggle, evt.newValue);
-                    if (!evt.newValue)
-                    {
-                        m_AppleGameId = null;
-                        m_AndroidGameId = null;
-                        SetUpGameId();
-                    }
                 });
             }
             else
@@ -147,56 +115,17 @@ namespace UnityEditor.Connect
             }
         }
 
-        void RequestAdsGameIds()
+        void UpdateServiceToggleAndDashboardLink(bool isEnabled)
         {
-            if (m_CurrentWebRequest == null)
+            if (m_GoToDashboard != null)
             {
-                var bodyContent = "{\"projectGUID\": \"" + UnityConnect.instance.projectInfo.projectGUID + "\",\"projectName\":\"" + UnityConnect.instance.projectInfo.projectName + "\",\"token\":\"" + UnityConnect.instance.GetUserInfo().accessToken + "\"}";
-                var uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(bodyContent));
-
-                m_CurrentWebRequest = new UnityWebRequest(ServicesConfiguration.instance.adsOperateApiUrl + k_GameIdApiUrl, UnityWebRequest.kHttpVerbPOST) { downloadHandler = new DownloadHandlerBuffer(), uploadHandler = uploadHandler };
-                m_CurrentWebRequest.SetRequestHeader("Content-Type", "application/json;charset=UTF-8");
-                var operation = m_CurrentWebRequest.SendWebRequest();
-                operation.completed += RequestOperationOnCompleted;
+                m_GoToDashboard.style.display = (isEnabled) ? DisplayStyle.Flex : DisplayStyle.None;
             }
-        }
 
-        void RequestOperationOnCompleted(AsyncOperation asyncOperation)
-        {
-            if (asyncOperation.isDone)
+            if (m_MainServiceToggle != null)
             {
-                if ((m_CurrentWebRequest != null) &&
-                    (m_CurrentWebRequest.result != UnityWebRequest.Result.ConnectionError) &&
-                    (m_CurrentWebRequest.result != UnityWebRequest.Result.ProtocolError) &&
-                    (m_CurrentWebRequest.downloadHandler != null))
-                {
-                    if (m_CurrentWebRequest.downloadHandler.text.Length != 0)
-                    {
-                        var jsonParser = new JSONParser(m_CurrentWebRequest.downloadHandler.text);
-                        try
-                        {
-                            var json = jsonParser.Parse();
-                            var key = k_JsonAppleGameId;
-                            if (json.AsDict().ContainsKey(key))
-                            {
-                                m_AppleGameId = json.AsDict()[key].ToString();
-                            }
-                            key = k_JsonAndroidGameId;
-                            if (json.AsDict().ContainsKey(key))
-                            {
-                                m_AndroidGameId = json.AsDict()[key].ToString();
-                            }
-                            SetUpGameId();
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.LogException(ex);
-                            NotificationManager.instance.Publish(Notification.Topic.AdsService, Notification.Severity.Error, ex.Message);
-                        }
-                    }
-                }
-                m_CurrentWebRequest?.Dispose();
-                m_CurrentWebRequest = null;
+                m_MainServiceToggle.SetValueWithoutNotify(isEnabled);
+                SetupServiceToggleLabel(m_MainServiceToggle, isEnabled);
             }
         }
 
@@ -204,16 +133,13 @@ namespace UnityEditor.Connect
         {
             var unavailableGameId = L10n.Tr("N/A");
 
-            AdvertisementSettings.SetGameId(RuntimePlatform.IPhonePlayer, m_AppleGameId);
-            AdvertisementSettings.SetGameId(RuntimePlatform.Android, m_AndroidGameId);
-            if (m_EnabledState.m_AndroidGameIdTextField != null)
-            {
-                m_EnabledState.m_AndroidGameIdTextField.value = m_AndroidGameId ?? unavailableGameId;
-            }
-            if (m_EnabledState.m_AppleGameIdTextField != null)
-            {
-                m_EnabledState.m_AppleGameIdTextField.value = m_AppleGameId ?? unavailableGameId;
-            }
+            // Getting the textfield for updates with the actual GameId values...
+            var appleGameId = AdvertisementSettings.GetGameId(RuntimePlatform.IPhonePlayer);
+            var androidGameId = AdvertisementSettings.GetGameId(RuntimePlatform.Android);
+
+            var scrollContainer = rootVisualElement.Q(className: k_ServiceScrollContainerClassName);
+            scrollContainer.Q<TextField>(name: k_AppleGameIdName)?.SetValueWithoutNotify(appleGameId ?? unavailableGameId);
+            scrollContainer.Q<TextField>(name: k_AndroidGameIdName)?.SetValueWithoutNotify(androidGameId ?? unavailableGameId);
         }
 
         protected override void ToggleRestrictedVisualElementsAvailability(bool enable)
@@ -266,7 +192,7 @@ namespace UnityEditor.Connect
             {
                 var clickable = new Clickable(() =>
                 {
-                    OpenDashboardForOrganizationForeignKey(ServicesConfiguration.instance.adsDashboardUrl);
+                    OpenDashboardForOrgKeyAndProjectGuid(ServicesConfiguration.instance.adsDashboardUrl);
                 });
                 m_GoToDashboard.AddManipulator(clickable);
             }
@@ -280,12 +206,6 @@ namespace UnityEditor.Connect
             // Make sure to reset the state machine
             m_StateMachine.ClearCurrentState();
 
-            if (m_CurrentWebRequest != null)
-            {
-                m_CurrentWebRequest.Abort();
-                m_CurrentWebRequest.Dispose();
-                m_CurrentWebRequest = null;
-            }
             UnregisterEvent();
         }
 
@@ -295,6 +215,7 @@ namespace UnityEditor.Connect
             {
                 AdsService.instance.serviceAfterEnableEvent += ServiceIsEnablingEvent;
                 AdsService.instance.serviceAfterDisableEvent += ServiceIsDisablingEvent;
+                AdsService.instance.gameIdsUpdatedEvent += GameIdsUpdatedEvent;
                 m_EventHandlerInitialized = true;
             }
         }
@@ -305,6 +226,7 @@ namespace UnityEditor.Connect
             {
                 AdsService.instance.serviceAfterEnableEvent -= ServiceIsEnablingEvent;
                 AdsService.instance.serviceAfterDisableEvent -= ServiceIsDisablingEvent;
+                AdsService.instance.gameIdsUpdatedEvent -= GameIdsUpdatedEvent;
                 m_EventHandlerInitialized = false;
             }
         }
@@ -325,6 +247,11 @@ namespace UnityEditor.Connect
                 m_MainServiceToggle.SetValueWithoutNotify(false);
                 m_StateMachine.ProcessEvent(AdsEvent.Disabling);
             }
+        }
+
+        void GameIdsUpdatedEvent()
+        {
+            SetUpGameId();
         }
 
         class BaseState : GenericBaseState<AdsProjectSettings, AdsEvent>
@@ -364,6 +291,7 @@ namespace UnityEditor.Connect
                         });
                         gettingStarted.AddManipulator(clickable);
                     }
+                    provider.UpdateServiceToggleAndDashboardLink(provider.serviceInstance.IsServiceEnabled());
                 }
                 scrollContainer.Add(ServicesUtils.SetupSupportedPlatformsBlock(ServicesUtils.GetAdsSupportedPlatforms()));
                 provider.HandlePermissionRestrictedControls();
@@ -378,9 +306,6 @@ namespace UnityEditor.Connect
         // Enabled state of the service
         sealed class EnabledState : BaseState
         {
-            public TextField m_AppleGameIdTextField;
-            public TextField m_AndroidGameIdTextField;
-
             bool m_AssetStoreWarningHasBeenShown;
 
             public EnabledState(SimpleStateMachine<AdsEvent> simpleStateMachine, AdsProjectSettings provider)
@@ -449,20 +374,16 @@ namespace UnityEditor.Connect
                         });
                     }
 
+                    provider.UpdateServiceToggleAndDashboardLink(provider.serviceInstance.IsServiceEnabled());
+
                     // Prepare the package section and update the package information
                     PreparePackageSection(scrollContainer);
                     UpdatePackageInformation();
 
-                    // Getting the textfield for updates with the actual GameId values...
-                    m_AppleGameIdTextField = scrollContainer.Q<TextField>(k_AppleGameIdName);
-                    m_AndroidGameIdTextField = scrollContainer.Q<TextField>(k_AndroidGameIdName);
-                    provider.SetUpGameId();
-                    scrollContainer.Add(ServicesUtils.SetupSupportedPlatformsBlock(ServicesUtils.GetAdsSupportedPlatforms()));
-
                     provider.HandlePermissionRestrictedControls();
                 }
-                // Refresh the game Id when entering the ON state...
-                provider.RequestAdsGameIds();
+
+                provider.SetUpGameId();
             }
 
             SimpleStateMachine<AdsEvent>.State HandleUnbinding(AdsEvent raisedEvent)

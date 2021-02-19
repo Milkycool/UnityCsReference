@@ -2,14 +2,19 @@
 // Copyright (c) Unity Technologies. For terms of use, see
 // https://unity3d.com/legal/licenses/Unity_Reference_Only_License
 
-using System.Globalization;
 using UnityEngine;
-using UnityEditorInternal;
 
 namespace UnityEditor
 {
     internal class CubemapPreview
     {
+        static readonly int s_ShaderCubemapRotation = Shader.PropertyToID("_CubemapRotation");
+        static readonly int s_ShaderMip = Shader.PropertyToID("_Mip");
+        static readonly int s_ShaderAlpha = Shader.PropertyToID("_Alpha");
+        static readonly int s_ShaderIntensity = Shader.PropertyToID("_Intensity");
+        static readonly int s_ShaderIsNormalMap = Shader.PropertyToID("_IsNormalMap");
+        static readonly int s_ShaderExposure = Shader.PropertyToID("_Exposure");
+
         private enum PreviewType
         {
             RGB = 0,
@@ -21,6 +26,11 @@ namespace UnityEditor
         [SerializeField]
         float                           m_MipLevel = 0.0F;
         private float                   m_Intensity = 1.0f;
+
+        [SerializeField]
+        float m_ExposureSliderValue = 0.0f;
+
+        float m_ExposureSliderMax = 16f; // this value can be altered by the user
 
         // Cached preview data
         private PreviewRenderUtility    m_PreviewUtility;
@@ -61,6 +71,13 @@ namespace UnityEditor
             m_Intensity = intensity;
         }
 
+        protected float GetExposureValueForTexture(Texture t)
+        {
+            if (TextureUtil.NeedsExposureControl(t))
+                return m_ExposureSliderValue;
+            return 0.0f;
+        }
+
         void InitPreview()
         {
             // Initialized?
@@ -83,6 +100,8 @@ namespace UnityEditor
             bool alphaOnly = true;
             //@TODO: Share some code with texture inspector???
             bool hasAlpha = false;
+            bool needsExposureControl = false;
+
             int mipCount = 8;
             foreach (Texture t2 in targets)
             {
@@ -100,6 +119,9 @@ namespace UnityEditor
                         if (mode == TextureUsageMode.Default) // all other texture usage modes don't displayable alpha
                             hasAlpha = true;
                     }
+
+                    if (TextureUtil.NeedsExposureControl(t2))
+                        needsExposureControl = true;
                 }
                 else
                 {
@@ -125,6 +147,11 @@ namespace UnityEditor
                 int index = (int)m_PreviewType;
                 if (GUILayout.Button(kPreviewIcons[index], Styles.preButton))
                     m_PreviewType = (PreviewType)(++index % kPreviewIcons.Length);
+            }
+
+            if (needsExposureControl)
+            {
+                m_ExposureSliderValue = EditorGUIInternal.ExposureSlider(m_ExposureSliderValue, ref m_ExposureSliderMax, Styles.preSlider);
             }
 
             GUI.enabled = (mipCount != 1);
@@ -193,13 +220,15 @@ namespace UnityEditor
             var mat = EditorGUIUtility.LoadRequired("Previews/PreviewCubemapMaterial.mat") as Material;
             mat.mainTexture = t;
 
-            mat.SetMatrix("_CubemapRotation", Matrix4x4.TRS(Vector3.zero, rot, Vector3.one));
+            mat.SetMatrix(s_ShaderCubemapRotation, Matrix4x4.TRS(Vector3.zero, rot, Vector3.one));
 
             // -1 indicates "use regular sampling"; mips 0 and larger sample only that mip level for preview
             float mipLevel = GetMipLevelForRendering(t);
-            mat.SetFloat("_Mip", mipLevel);
-            mat.SetFloat("_Alpha", (m_PreviewType == PreviewType.Alpha) ? 1.0f : 0.0f);
-            mat.SetFloat("_Intensity", m_Intensity);
+            mat.SetFloat(s_ShaderMip, mipLevel);
+            mat.SetFloat(s_ShaderAlpha, (m_PreviewType == PreviewType.Alpha) ? 1.0f : 0.0f);
+            mat.SetFloat(s_ShaderIntensity, m_Intensity);
+            mat.SetInt(s_ShaderIsNormalMap, TextureInspector.IsNormalMap(t) ? 1 : 0);
+            mat.SetFloat(s_ShaderExposure, GetExposureValueForTexture(t));
 
             m_PreviewUtility.DrawMesh(m_Mesh, Vector3.zero, rot, mat, 0);
             m_PreviewUtility.Render();

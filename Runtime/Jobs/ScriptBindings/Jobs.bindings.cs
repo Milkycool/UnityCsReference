@@ -76,23 +76,23 @@ namespace Unity.Jobs.LowLevel.Unsafe
         [NativeMethod(IsFreeFunction = true, IsThreadSafe = true)]
         public static extern bool GetWorkStealingRange(ref JobRanges ranges, int jobIndex, out int beginIndex, out int endIndex);
 
-        [FreeFunction("ScheduleManagedJob")]
+        [FreeFunction("ScheduleManagedJob", ThrowsException = true)]
         public static extern JobHandle Schedule(ref JobScheduleParameters parameters);
 
-        [FreeFunction("ScheduleManagedJobParallelFor")]
+        [FreeFunction("ScheduleManagedJobParallelFor", ThrowsException = true)]
         public static extern JobHandle ScheduleParallelFor(ref JobScheduleParameters parameters, int arrayLength, int innerloopBatchCount);
 
-        [FreeFunction("ScheduleManagedJobParallelForDeferArraySize")]
+        [FreeFunction("ScheduleManagedJobParallelForDeferArraySize", ThrowsException = true)]
         unsafe public static extern JobHandle ScheduleParallelForDeferArraySize(ref JobScheduleParameters parameters, int innerloopBatchCount, void* listData, void* listDataAtomicSafetyHandle);
 
-        [FreeFunction("ScheduleManagedJobParallelForTransform")]
+        [FreeFunction("ScheduleManagedJobParallelForTransform", ThrowsException = true)]
         public static extern JobHandle ScheduleParallelForTransform(ref JobScheduleParameters parameters, IntPtr transfromAccesssArray);
 
         [NativeMethod(IsThreadSafe = true, IsFreeFunction = true)]
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         unsafe public static extern void PatchBufferMinMaxRanges(IntPtr bufferRangePatchData, void* jobdata, int startIndex, int rangeSize);
 
-        [FreeFunction]
+        [FreeFunction(ThrowsException = true)]
         private static extern IntPtr CreateJobReflectionData(Type wrapperJobType, Type userJobType, JobType jobType, object managedJobFunction0, object managedJobFunction1, object managedJobFunction2);
 
         public static IntPtr CreateJobReflectionData(Type type, JobType jobType, object managedJobFunction0, object managedJobFunction1 = null, object managedJobFunction2 = null)

@@ -14,7 +14,6 @@ namespace UnityEditor
     class Toolbar : GUIView
     {
         const float k_ToolbarHeight = 30f;
-        static readonly Type k_DefaultToolbarType = typeof(UnityMainToolbar);
 
         static class Styles
         {
@@ -28,15 +27,16 @@ namespace UnityEditor
 
         public static Toolbar get;
 
-        internal static bool requestShowCollabToolbar;
         public static bool isLastShowRequestPartial = true;
 
 
         [SerializeField]
-        List<EditorToolbar> m_LoadedToolbars = new List<EditorToolbar>();
+        List<EditorToolbar> m_LoadedToolbars;
 
         internal EditorToolbar GetSingleton(Type type)
         {
+            if (m_LoadedToolbars == null)
+                m_LoadedToolbars = new List<EditorToolbar>();
             m_LoadedToolbars = m_LoadedToolbars.Where(x => x != null).ToList();
             var res = m_LoadedToolbars.FirstOrDefault(x => x.GetType() == type);
             if (res != null)
@@ -54,7 +54,7 @@ namespace UnityEditor
             get
             {
                 if (m_MainToolbar == null)
-                    m_MainToolbar = GetSingleton(k_DefaultToolbarType);
+                    m_MainToolbar = GetSingleton(EditorUIService.instance.GetDefaultToolbarType());
                 return m_MainToolbar;
             }
 
@@ -65,25 +65,20 @@ namespace UnityEditor
 
                 if (m_MainToolbar != null)
                 {
-                    m_MainToolbar.m_Parent = this;
-
-
+                    m_MainToolbar.m_Parent = null;
                     if (m_MainToolbar.rootVisualElement != null)
                         m_MainToolbar.rootVisualElement.RemoveFromHierarchy();
+                    DestroyImmediate(m_MainToolbar);
                 }
 
-                m_MainToolbar = value == null ? GetSingleton(k_DefaultToolbarType) : value;
+                m_MainToolbar = value == null ? GetSingleton(EditorUIService.instance.GetDefaultToolbarType()) : value;
                 m_MainToolbar.m_Parent = this;
 
                 PositionChanged(this);
 
                 if (m_MainToolbar.rootVisualElement != null)
                 {
-                    if (!EditorWindowBackendManager.IsBackendCompatible(windowBackend, this))
-                    {
-                        //We create a new compatible backend
-                        windowBackend = EditorWindowBackendManager.GetBackend(this);
-                    }
+                    ValidateWindowBackendForCurrentView();
 
                     var visualTree = windowBackend.visualTree as UnityEngine.UIElements.VisualElement;
 
@@ -126,7 +121,7 @@ namespace UnityEditor
             get = this;
 
             if (m_MainToolbar == null)
-                m_MainToolbar = CreateInstance<UnityMainToolbar>();
+                m_MainToolbar = (EditorToolbar)CreateInstance(EditorUIService.instance.GetDefaultToolbarType());
 
             if (m_MainToolbar.rootVisualElement != null)
             {
@@ -135,6 +130,8 @@ namespace UnityEditor
             }
 
             PositionChanged(this);
+
+            m_EventInterests.wantsLessLayoutEvents = true;
         }
 
         protected override void OnDisable()
@@ -185,7 +182,7 @@ namespace UnityEditor
         // @todo Remove when collab updates
         internal static void AddSubToolbar(SubToolbar subToolbar)
         {
-            UnityMainToolbar.AddSubToolbar(subToolbar);
+            EditorUIService.instance.AddSubToolbar(subToolbar);
         }
 
         // Repaints all views, called from C++ when playmode entering is aborted

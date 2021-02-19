@@ -24,9 +24,20 @@ namespace UnityEditor.Modules
 
         static readonly string[] kResizeAlgorithmStrings = { "Mitchell", "Bilinear" };
         static readonly int[] kResizeAlgorithmValues = { (int)TextureResizeAlgorithm.Mitchell, (int)TextureResizeAlgorithm.Bilinear };
-        static readonly GUIContent resizeAlgorithm = EditorGUIUtility.TrTextContent("Resize Algorithm", "Select algorithm to apply for textures when scaled down.");
-
+        static readonly GUIContent kResizeAlgorithm = EditorGUIUtility.TrTextContent("Resize Algorithm", "Select algorithm to apply for textures when scaled down.");
+        static readonly GUIContent kTextureFormat = EditorGUIUtility.TrTextContent("Format");
         static readonly GUIContent kTextureCompression = EditorGUIUtility.TrTextContent("Compression", "How will this texture be compressed?");
+        static readonly GUIContent kUseAlphaSplitLabel = EditorGUIUtility.TrTextContent("Split Alpha Channel", "Alpha for this texture will be preserved by splitting the alpha channel to another texture, and both resulting textures will be compressed using ETC1.");
+        static readonly GUIContent kCrunchedCompression = EditorGUIUtility.TrTextContent("Use Crunch Compression", "Texture is crunch-compressed to save space on disk when applicable.");
+        static readonly GUIContent kCompressionQuality = EditorGUIUtility.TrTextContent("Compressor Quality");
+        static readonly GUIContent kCompressionQualitySlider = EditorGUIUtility.TrTextContent("Compressor Quality", "Use the slider to adjust compression quality from 0 (Fastest) to 100 (Best)");
+        static readonly GUIContent[] kMobileCompressionQualityOptions =
+        {
+            EditorGUIUtility.TrTextContent("Fast"),
+            EditorGUIUtility.TrTextContent("Normal"),
+            EditorGUIUtility.TrTextContent("Best")
+        };
+
         static readonly GUIContent[] kTextureCompressionOptions =
         {
             EditorGUIUtility.TrTextContent("None", "Texture is not compressed."),
@@ -42,62 +53,60 @@ namespace UnityEditor.Modules
             (int)TextureImporterCompression.CompressedHQ
         };
 
-        public virtual void ShowImportSettings(Editor baseEditor, TextureImportPlatformSettings platformSettings)
+        public virtual void ShowImportSettings(BaseTextureImportPlatformSettings editor)
         {
-            TextureImporterInspector editor = baseEditor as TextureImporterInspector;
-
             // Max texture size
             EditorGUI.BeginChangeCheck();
-            EditorGUI.showMixedValue = platformSettings.overriddenIsDifferent || platformSettings.maxTextureSizeIsDifferent;
-            int maxTextureSize = EditorGUILayout.IntPopup(maxSize.text, platformSettings.maxTextureSize, kMaxTextureSizeStrings, kMaxTextureSizeValues);
+            EditorGUI.showMixedValue = editor.model.overriddenIsDifferent || editor.model.maxTextureSizeIsDifferent;
+            int maxTextureSize = EditorGUILayout.IntPopup(maxSize.text, editor.model.platformTextureSettings.maxTextureSize, kMaxTextureSizeStrings, kMaxTextureSizeValues);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
             {
-                platformSettings.SetMaxTextureSizeForAll(maxTextureSize);
+                editor.model.SetMaxTextureSizeForAll(maxTextureSize);
             }
 
             // Resize Algorithm
             EditorGUI.BeginChangeCheck();
-            EditorGUI.showMixedValue = platformSettings.overriddenIsDifferent || platformSettings.resizeAlgorithmIsDifferent;
-            int resizeAlgorithmVal = EditorGUILayout.IntPopup(resizeAlgorithm.text, (int)platformSettings.resizeAlgorithm, kResizeAlgorithmStrings, kResizeAlgorithmValues);
+            EditorGUI.showMixedValue = editor.model.overriddenIsDifferent || editor.model.resizeAlgorithmIsDifferent;
+            int resizeAlgorithmVal = EditorGUILayout.IntPopup(kResizeAlgorithm.text, (int)editor.model.platformTextureSettings.resizeAlgorithm, kResizeAlgorithmStrings, kResizeAlgorithmValues);
             EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
             {
-                platformSettings.SetResizeAlgorithmForAll((TextureResizeAlgorithm)resizeAlgorithmVal);
+                editor.model.SetResizeAlgorithmForAll((TextureResizeAlgorithm)resizeAlgorithmVal);
             }
 
             // Texture format
-            int[] formatValuesForAll = null;
-            string[] formatStringsForAll = null;
+            int[] formatValuesForAll = {};
+            string[] formatStringsForAll = {};
             bool formatOptionsAreDifferent = false;
 
             int formatForAll = 0;
+            var textureShape = TextureImporterShape.Texture2D;
 
             // TODO : This should not be calculated every refresh and be kept in a cache somewhere instead...
-            for (int i = 0; i < editor.targets.Length; i++)
+            for (int i = 0; i < editor.GetTargetCount(); i++)
             {
-                TextureImporter imp = editor.targets[i] as TextureImporter;
-                TextureImporterSettings settings = platformSettings.GetSettings(imp);
+                TextureImporterSettings settings = editor.GetImporterSettings(i);
                 TextureImporterType textureTypeForThis = editor.textureTypeHasMultipleDifferentValues ? settings.textureType : editor.textureType;
-                int format = (int)platformSettings.format;
+                int format = (int)editor.model.platformTextureSettings.format;
 
                 int[] formatValues = null;
                 string[] formatStrings = null;
 
-                if (!platformSettings.isDefault && !platformSettings.overridden)
+                if (!editor.model.isDefault && !editor.model.platformTextureSettings.overridden)
                 {
                     // If not overriden, show what the auto format is going to be
                     // don't care about alpha in normal maps. If editor.assetTarget is null
                     // then we are dealing with texture preset and we show all options.
-                    var showSettingsForPreset = editor.assetTarget == null;
-                    var sourceHasAlpha = showSettingsForPreset || (imp.DoesSourceTextureHaveAlpha() &&
+                    var showSettingsForPreset = editor.ShowPresetSettings();
+                    var sourceHasAlpha = showSettingsForPreset || (editor.DoesSourceTextureHaveAlpha(i) &&
                         textureTypeForThis != TextureImporterType.NormalMap);
 
                     format = (int)TextureImporter.DefaultFormatFromTextureParameters(settings,
-                        platformSettings.platformTextureSettings,
-                        editor.assetTarget && sourceHasAlpha,
-                        editor.assetTarget && imp.IsSourceTextureHDR(),
-                        platformSettings.m_Target);
+                        editor.model.platformTextureSettings,
+                        !showSettingsForPreset && sourceHasAlpha,
+                        !showSettingsForPreset && editor.IsSourceTextureHDR(i),
+                        editor.model.buildTarget);
 
                     formatValues = new int[] { format };
                     formatStrings = new string[] { TextureUtil.GetTextureFormatString((TextureFormat)format) };
@@ -105,7 +114,7 @@ namespace UnityEditor.Modules
                 else
                 {
                     // otherwise show valid formats
-                    platformSettings.GetValidTextureFormatsAndStrings(textureTypeForThis, out formatValues, out formatStrings);
+                    editor.model.GetValidTextureFormatsAndStrings(textureTypeForThis, out formatValues, out formatStrings);
                 }
 
                 // Check if values are the same
@@ -114,6 +123,7 @@ namespace UnityEditor.Modules
                     formatValuesForAll = formatValues;
                     formatStringsForAll = formatStrings;
                     formatForAll = format;
+                    textureShape = settings.textureShape;
                 }
                 else
                 {
@@ -128,54 +138,55 @@ namespace UnityEditor.Modules
             using (new EditorGUI.DisabledScope(formatOptionsAreDifferent || formatStringsForAll.Length == 1))
             {
                 EditorGUI.BeginChangeCheck();
-                bool mixedValues = formatOptionsAreDifferent || platformSettings.textureFormatIsDifferent;
+                bool mixedValues = formatOptionsAreDifferent || editor.model.textureFormatIsDifferent;
                 EditorGUI.showMixedValue = mixedValues;
-                var selectionResult = EditorGUILayout.IntPopup(TextureImporterInspector.s_Styles.textureFormat, formatForAll, EditorGUIUtility.TempContent(formatStringsForAll), formatValuesForAll);
+                var selectionResult = EditorGUILayout.IntPopup(kTextureFormat, formatForAll, EditorGUIUtility.TempContent(formatStringsForAll), formatValuesForAll);
                 EditorGUI.showMixedValue = false;
                 if (EditorGUI.EndChangeCheck())
                 {
-                    platformSettings.SetTextureFormatForAll((TextureImporterFormat)selectionResult);
+                    editor.model.SetTextureFormatForAll((TextureImporterFormat)selectionResult);
                     formatForAll = selectionResult;
                 }
 
                 if (!mixedValues && !Array.Exists(formatValuesForAll, i => i == formatForAll))
                 {
-                    EditorGUILayout.HelpBox(string.Format(L10n.Tr("The selected format value {0} is not compatible on this platform, please change it to a valid one from the dropdown."), (TextureImporterFormat)formatForAll), MessageType.Error);
+                    EditorGUILayout.HelpBox(string.Format(L10n.Tr("The selected format value {0} is not compatible on this platform for the selected texture type, please change it to a valid one from the dropdown."), (TextureImporterFormat)formatForAll), MessageType.Error);
                 }
             }
 
             // Texture Compression
-            if (platformSettings.isDefault && platformSettings.format == TextureImporterFormat.Automatic)
+            if (editor.model.isDefault && editor.model.platformTextureSettings.format == TextureImporterFormat.Automatic)
             {
                 EditorGUI.BeginChangeCheck();
-                EditorGUI.showMixedValue = platformSettings.overriddenIsDifferent ||
-                    platformSettings.textureCompressionIsDifferent ||
-                    platformSettings.format != TextureImporterFormat.Automatic;
+                EditorGUI.showMixedValue = editor.model.overriddenIsDifferent ||
+                    editor.model.textureCompressionIsDifferent ||
+                    editor.model.platformTextureSettings.format != TextureImporterFormat.Automatic;
                 TextureImporterCompression textureCompression =
                     (TextureImporterCompression)EditorGUILayout.IntPopup(kTextureCompression,
-                        (int)platformSettings.textureCompression, kTextureCompressionOptions,
+                        (int)editor.model.platformTextureSettings.textureCompression, kTextureCompressionOptions,
                         kTextureCompressionValues);
                 EditorGUI.showMixedValue = false;
                 if (EditorGUI.EndChangeCheck())
                 {
-                    platformSettings.SetTextureCompressionForAll(textureCompression);
+                    editor.model.SetTextureCompressionForAll(textureCompression);
                 }
             }
 
             // Use Crunch Compression
-            if (platformSettings.isDefault &&
+            if (editor.model.isDefault &&
                 (TextureImporterFormat)formatForAll == TextureImporterFormat.Automatic &&
-                platformSettings.textureCompression != TextureImporterCompression.Uncompressed)
+                editor.model.platformTextureSettings.textureCompression != TextureImporterCompression.Uncompressed &&
+                (textureShape == TextureImporterShape.Texture2D || textureShape == TextureImporterShape.TextureCube)) // 2DArray & 3D don't support Crunch
             {
                 EditorGUI.BeginChangeCheck();
-                EditorGUI.showMixedValue = platformSettings.overriddenIsDifferent ||
-                    platformSettings.crunchedCompressionIsDifferent;
+                EditorGUI.showMixedValue = editor.model.overriddenIsDifferent ||
+                    editor.model.crunchedCompressionIsDifferent;
                 bool crunchedCompression = EditorGUILayout.Toggle(
-                    TextureImporterInspector.s_Styles.crunchedCompression, platformSettings.crunchedCompression);
+                    kCrunchedCompression, editor.model.platformTextureSettings.crunchedCompression);
                 EditorGUI.showMixedValue = false;
                 if (EditorGUI.EndChangeCheck())
                 {
-                    platformSettings.SetCrunchedCompressionForAll(crunchedCompression);
+                    editor.model.SetCrunchedCompressionForAll(crunchedCompression);
                 }
             }
 
@@ -185,49 +196,49 @@ namespace UnityEditor.Modules
             ;
 
             if (
-                (platformSettings.isDefault &&
+                (editor.model.isDefault &&
                  (TextureImporterFormat)formatForAll == TextureImporterFormat.Automatic &&
-                 platformSettings.textureCompression != TextureImporterCompression.Uncompressed &&
-                 platformSettings.crunchedCompression) ||
-                (platformSettings.isDefault && platformSettings.crunchedCompression && isCrunchedFormat) ||
-                (!platformSettings.isDefault && isCrunchedFormat) ||
-                (!platformSettings.textureFormatIsDifferent && ArrayUtility.Contains<TextureImporterFormat>(
+                 editor.model.platformTextureSettings.textureCompression != TextureImporterCompression.Uncompressed &&
+                 editor.model.platformTextureSettings.crunchedCompression) ||
+                (editor.model.isDefault && editor.model.platformTextureSettings.crunchedCompression && isCrunchedFormat) ||
+                (!editor.model.isDefault && isCrunchedFormat) ||
+                (!editor.model.textureFormatIsDifferent && ArrayUtility.Contains<TextureImporterFormat>(
                     TextureImporterInspector.kFormatsWithCompressionSettings,
                     (TextureImporterFormat)formatForAll)))
             {
                 EditorGUI.BeginChangeCheck();
-                EditorGUI.showMixedValue = platformSettings.overriddenIsDifferent ||
-                    platformSettings.compressionQualityIsDifferent;
+                EditorGUI.showMixedValue = editor.model.overriddenIsDifferent ||
+                    editor.model.compressionQualityIsDifferent;
 
                 // Prior to exposing compression quality for BC6H/BC7 formats they were always compressed at maximum quality even though the setting was
                 // defaulted to 'Normal'.  Now BC6H/BC7 quality is exposed to the user as Fast/Normal/Best 'Normal' maps to one setting down from maximum in the
                 // ISPC compressor but to maintain the behaviour of existing projects we need to force their quality up to 'Best'.  The 'forceMaximumCompressionQuality_BC6H_BC7'
                 // flag is set when loading existing texture platform settings to do this and cleared when the compression quality level is manually set (by UI or API)
-                bool forceBestQuality = platformSettings.forceMaximumCompressionQuality_BC6H_BC7 && (((TextureImporterFormat)formatForAll == TextureImporterFormat.BC6H) || ((TextureImporterFormat)formatForAll == TextureImporterFormat.BC7));
-                int compressionQuality = forceBestQuality ? (int)TextureCompressionQuality.Best : platformSettings.compressionQuality;
+                bool forceBestQuality = editor.model.forceMaximumCompressionQuality_BC6H_BC7 && (((TextureImporterFormat)formatForAll == TextureImporterFormat.BC6H) || ((TextureImporterFormat)formatForAll == TextureImporterFormat.BC7));
+                int compressionQuality = forceBestQuality ? (int)TextureCompressionQuality.Best : editor.model.platformTextureSettings.compressionQuality;
 
-                compressionQuality = EditCompressionQuality(platformSettings.m_Target, compressionQuality, isCrunchedFormat, (TextureImporterFormat)formatForAll);
+                compressionQuality = EditCompressionQuality(editor.model.buildTarget, compressionQuality, isCrunchedFormat, (TextureImporterFormat)formatForAll);
                 EditorGUI.showMixedValue = false;
                 if (EditorGUI.EndChangeCheck())
                 {
-                    platformSettings.SetCompressionQualityForAll(compressionQuality);
+                    editor.model.SetCompressionQualityForAll(compressionQuality);
                     //SyncPlatformSettings ();
                 }
             }
 
             // show the ETC1 split option only for sprites on platforms supporting ETC and only when there is an alpha channel
-            bool isETCPlatform = TextureImporter.IsETC1SupportedByBuildTarget(BuildPipeline.GetBuildTargetByName(platformSettings.name));
+            bool isETCPlatform = TextureImporter.IsETC1SupportedByBuildTarget(BuildPipeline.GetBuildTargetByName(editor.model.platformTextureSettings.name));
             bool isDealingWithSprite = (editor.spriteImportMode != SpriteImportMode.None);
             bool isETCFormatSelected = TextureImporter.IsTextureFormatETC1Compression((TextureFormat)formatForAll);
 
             if (isETCPlatform && isDealingWithSprite && isETCFormatSelected)
             {
                 EditorGUI.BeginChangeCheck();
-                EditorGUI.showMixedValue = platformSettings.overriddenIsDifferent || platformSettings.allowsAlphaSplitIsDifferent;
-                bool allowsAlphaSplit = EditorGUILayout.Toggle(TextureImporterInspector.s_Styles.useAlphaSplitLabel, platformSettings.allowsAlphaSplitting);
+                EditorGUI.showMixedValue = editor.model.overriddenIsDifferent || editor.model.allowsAlphaSplitIsDifferent;
+                bool allowsAlphaSplit = EditorGUILayout.Toggle(kUseAlphaSplitLabel, editor.model.platformTextureSettings.allowsAlphaSplitting);
                 if (EditorGUI.EndChangeCheck())
                 {
-                    platformSettings.SetAllowsAlphaSplitForAll(allowsAlphaSplit);
+                    editor.model.SetAllowsAlphaSplitForAll(allowsAlphaSplit);
                 }
             }
         }
@@ -244,7 +255,7 @@ namespace UnityEditor.Modules
                 else if (compression == (int)TextureCompressionQuality.Best)
                     compressionMode = 2;
 
-                int ret = EditorGUILayout.Popup(TextureImporterInspector.s_Styles.compressionQuality, compressionMode, TextureImporterInspector.s_Styles.mobileCompressionQualityOptions);
+                int ret = EditorGUILayout.Popup(kCompressionQuality, compressionMode, kMobileCompressionQualityOptions);
 
                 switch (ret)
                 {
@@ -256,7 +267,7 @@ namespace UnityEditor.Modules
                 }
             }
             else
-                compression = EditorGUILayout.IntSlider(TextureImporterInspector.s_Styles.compressionQualitySlider, compression, 0, 100);
+                compression = EditorGUILayout.IntSlider(kCompressionQualitySlider, compression, 0, 100);
 
             return compression;
         }

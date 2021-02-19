@@ -4,6 +4,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using UnityEditor.Build;
 using UnityEngine;
 using UnityEngine.Bindings;
@@ -703,9 +705,9 @@ namespace UnityEditor
 
         internal static extern string[] templateCustomKeys { get; set; }
 
-        internal static extern void SetTemplateCustomValue(string key, string value);
+        public static extern void SetTemplateCustomValue(string name, string value);
 
-        internal static extern string GetTemplateCustomValue(string key);
+        public static extern string GetTemplateCustomValue(string name);
 
         internal static extern string spritePackerPolicy
         {
@@ -722,6 +724,11 @@ namespace UnityEditor
         [NativeMethod("GetUserScriptingDefineSymbolsForGroup")]
         public static extern string GetScriptingDefineSymbolsForGroup(BuildTargetGroup targetGroup);
 
+        public static void GetScriptingDefineSymbolsForGroup(BuildTargetGroup targetGroup, out string[] defines)
+        {
+            defines = GetScriptingDefineSymbolsForGroup(targetGroup).Split(';');
+        }
+
         internal static readonly char[] defineSplits = new[] { ';', ',', ' ' };
 
         // Set user-specified symbols for script compilation for the given build target group.
@@ -730,6 +737,43 @@ namespace UnityEditor
             if (!string.IsNullOrEmpty(defines))
                 defines = string.Join(";", defines.Split(defineSplits, StringSplitOptions.RemoveEmptyEntries));
             SetScriptingDefineSymbolsForGroupInternal(targetGroup, defines);
+        }
+
+        public static void SetScriptingDefineSymbolsForGroup(BuildTargetGroup targetGroup, string[] defines)
+        {
+            List<string> list = new List<string>();
+            var joined = new StringBuilder();
+
+            if (defines == null)
+                throw new ArgumentNullException("Value cannot be null");
+
+            foreach (var define in defines)
+            {
+                string[] split = define.Split(' ', ';');
+
+                // Split each define element, since there can be multiple defines added
+                foreach (var item in split)
+                {
+                    if (!string.IsNullOrEmpty(item))
+                    {
+                        list.Add(item);
+                    }
+                }
+            }
+
+            // Remove duplicates
+            defines = list.Distinct().ToArray();
+
+            // Join all defines to one string
+            foreach (var define in defines)
+            {
+                if (joined.Length != 0)
+                    joined.Append(';');
+
+                joined.Append(define);
+            }
+
+            SetScriptingDefineSymbolsForGroup(targetGroup, joined.ToString());
         }
 
         [StaticAccessor("GetPlayerSettings().GetEditorOnlyForUpdate()")]
@@ -812,6 +856,24 @@ namespace UnityEditor
         }
 
         public static extern bool allowUnsafeCode
+        {
+            [StaticAccessor("GetPlayerSettings().GetEditorOnly()")]
+            get;
+
+            [StaticAccessor("GetPlayerSettings().GetEditorOnlyForUpdate()")]
+            set;
+        }
+
+        internal static extern bool UseDeterministicCompilation
+        {
+            [StaticAccessor("GetPlayerSettings().GetEditorOnly()")]
+            get;
+
+            [StaticAccessor("GetPlayerSettings().GetEditorOnlyForUpdate()")]
+            set;
+        }
+
+        public static extern bool useReferenceAssemblies
         {
             [StaticAccessor("GetPlayerSettings().GetEditorOnly()")]
             get;
@@ -1094,6 +1156,9 @@ namespace UnityEditor
 
         // Should unused [[Mesh]] components be excluded from game build?
         public static extern bool stripUnusedMeshComponents { get; set; }
+
+        // Should unused mips be excluded from texture build?
+        public static extern bool mipStripping { get; set; }
 
         // Is the advanced version being used?
         [StaticAccessor("GetBuildSettings()")]

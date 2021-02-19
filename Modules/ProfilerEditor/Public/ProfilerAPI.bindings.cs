@@ -27,12 +27,15 @@ namespace UnityEditorInternal
         NotApplicable = 10
     }
 
+    // Must match ProfilerMemoryRecordMode in Profiler.h!!!
+    [Flags]
     public enum ProfilerMemoryRecordMode
     {
         None = 0,
-        ManagedAllocations,
-        AllAllocationsFast,
-        AllAllocationsFull
+        GCAlloc = 1 << 0,
+        UnsafeUtilityMalloc = 1 << 1,
+        JobHandleComplete = 1 << 2,
+        NativeAlloc = 1 << 3
     }
 
     [Flags]
@@ -205,6 +208,7 @@ namespace UnityEditorInternal
         static public extern void SetMarkerFiltering(string name);
 
         [StaticAccessor("profiling::GetProfilerSessionPtr()->GetProfilerHistory()", StaticAccessorType.Arrow)]
+        [Obsolete("Use GetFormattedCounterValue to get the stats including Profiler Counter data", false)]
         static public extern string GetFormattedStatisticsValue(int frame, int identifier);
 
         [StaticAccessor("profiling::GetProfilerSessionPtr()->GetProfilerHistory()", StaticAccessorType.Arrow)]
@@ -213,10 +217,17 @@ namespace UnityEditorInternal
         [StaticAccessor("profiling::GetProfilerSessionPtr()->GetProfilerHistory()", StaticAccessorType.Arrow)]
         static public extern void GetUISystemEventMarkersBatch(int firstFrame, int frameCount, [Out] EventMarker[] buffer, [Out] string[] names);
 
-
         [StaticAccessor("profiling::GetProfilerSessionPtr()->GetProfilerHistory()", StaticAccessorType.Arrow)]
         [NativeMethod("GetStatisticsValuesBatch")]
+        [Obsolete("Use GetCounterValuesBatch to read the stats including Profiler Counter data", false)]
         static public extern void GetStatisticsValues(int identifier, int firstFrame, float scale, [Out] float[] buffer, out float maxValue);
+
+        [StaticAccessor("profiling::GetProfilerSessionPtr()->GetProfilerHistory()", StaticAccessorType.Arrow)]
+        static public extern string GetFormattedCounterValue(int frame, ProfilerArea area, string name);
+
+        [StaticAccessor("profiling::GetProfilerSessionPtr()->GetProfilerHistory()", StaticAccessorType.Arrow)]
+        public static extern void GetCounterValuesBatch(ProfilerArea area, string name, int firstFrame, float scale, [Out] float[] buffer, out float maxValue);
+
 
         static public void GetGpuStatisticsAvailabilityStates(int firstFrame, [Out] GpuProfilingStatisticsAvailabilityStates[] buffer)
         {
@@ -262,6 +273,14 @@ namespace UnityEditorInternal
         static void InvokeNewProfilerFrameRecorded(int connectionId, int newFrameIndex)
         {
             NewProfilerFrameRecorded?.Invoke(connectionId, newFrameIndex);
+        }
+
+        public static event Action profileLoaded;
+
+        [RequiredByNativeCode]
+        static void InvokeProfileLoaded()
+        {
+            profileLoaded?.Invoke();
         }
 
         [Obsolete("ResetHistory is deprecated, use ClearAllFrames instead.")]

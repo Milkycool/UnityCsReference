@@ -11,16 +11,22 @@ namespace UnityEditor.PackageManager.UI
     {
         internal new class UxmlFactory : UxmlFactory<Alert> {}
 
-        private const float k_PositionRightOriginal = 5.0f;
-        private const float k_PositionRightWithScroll = 12.0f;
-
         public Action onCloseError;
+
+        private ResourceLoader m_ResourceLoader;
+        private void ResolveDependencies()
+        {
+            var container = ServicesContainer.instance;
+            m_ResourceLoader = container.Resolve<ResourceLoader>();
+        }
 
         public Alert()
         {
+            ResolveDependencies();
+
             UIUtils.SetElementDisplay(this, false);
 
-            var root = Resources.GetTemplate("Alert.uxml");
+            var root = m_ResourceLoader.GetTemplate("Alert.uxml");
             Add(root);
 
             cache = new VisualElementCache(root);
@@ -34,9 +40,13 @@ namespace UnityEditor.PackageManager.UI
 
         public void SetError(UIError error)
         {
-            var message = ApplicationUtil.instance.GetTranslationForText("An error occurred.");
-            if (error != null)
-                message = error.message ?? string.Format(ApplicationUtil.instance.GetTranslationForText("An error occurred ({0})"), error.errorCode.ToString());
+            var message = string.IsNullOrEmpty(error.message) ? L10n.Tr("An error occurred.")
+                : string.Format(L10n.Tr("An error occurred: {0}"), error.message);
+
+            if ((UIError.Attribute.IsDetailInConsole & error.attribute) != 0)
+            {
+                message = string.Format(L10n.Tr("{0} See console for more details."), message);
+            }
 
             alertMessage.text = message;
             UIUtils.SetElementDisplay(this, true);
@@ -45,7 +55,7 @@ namespace UnityEditor.PackageManager.UI
         public void ClearError()
         {
             UIUtils.SetElementDisplay(this, false);
-            alertMessage.text = "";
+            alertMessage.text = string.Empty;
             onCloseError = null;
         }
 

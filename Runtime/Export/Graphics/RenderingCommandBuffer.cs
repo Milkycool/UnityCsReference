@@ -204,6 +204,26 @@ namespace UnityEngine.Rendering
             Internal_SetComputeGraphicsBufferParam(computeShader, kernelIndex, Shader.PropertyToID(name), buffer);
         }
 
+        public void SetComputeConstantBufferParam(ComputeShader computeShader, int nameID, ComputeBuffer buffer, int offset, int size)
+        {
+            Internal_SetComputeConstantComputeBufferParam(computeShader, nameID, buffer, offset, size);
+        }
+
+        public void SetComputeConstantBufferParam(ComputeShader computeShader, string name, ComputeBuffer buffer, int offset, int size)
+        {
+            Internal_SetComputeConstantComputeBufferParam(computeShader, Shader.PropertyToID(name), buffer, offset, size);
+        }
+
+        public void SetComputeConstantBufferParam(ComputeShader computeShader, int nameID, GraphicsBuffer buffer, int offset, int size)
+        {
+            Internal_SetComputeConstantGraphicsBufferParam(computeShader, nameID, buffer, offset, size);
+        }
+
+        public void SetComputeConstantBufferParam(ComputeShader computeShader, string name, GraphicsBuffer buffer, int offset, int size)
+        {
+            Internal_SetComputeConstantGraphicsBufferParam(computeShader, Shader.PropertyToID(name), buffer, offset, size);
+        }
+
         // Execute a compute shader.
         public void DispatchCompute(ComputeShader computeShader, int kernelIndex, int threadGroupsX, int threadGroupsY, int threadGroupsZ)
         {
@@ -222,7 +242,13 @@ namespace UnityEngine.Rendering
 
         public void BuildRayTracingAccelerationStructure(RayTracingAccelerationStructure accelerationStructure)
         {
-            Internal_BuildRayTracingAccelerationStructure(accelerationStructure);
+            Vector3 zero = new Vector3(0, 0, 0);
+            Internal_BuildRayTracingAccelerationStructure(accelerationStructure, zero);
+        }
+
+        public void BuildRayTracingAccelerationStructure(RayTracingAccelerationStructure accelerationStructure, Vector3 relativeOrigin)
+        {
+            Internal_BuildRayTracingAccelerationStructure(accelerationStructure, relativeOrigin);
         }
 
         public void SetRayTracingAccelerationStructure(RayTracingShader rayTracingShader, string name, RayTracingAccelerationStructure rayTracingAccelerationStructure)
@@ -243,6 +269,26 @@ namespace UnityEngine.Rendering
         public void SetRayTracingBufferParam(RayTracingShader rayTracingShader, int nameID, ComputeBuffer buffer)
         {
             Internal_SetRayTracingBufferParam(rayTracingShader, nameID, buffer);
+        }
+
+        public void SetRayTracingConstantBufferParam(RayTracingShader rayTracingShader, int nameID, ComputeBuffer buffer, int offset, int size)
+        {
+            Internal_SetRayTracingConstantComputeBufferParam(rayTracingShader, nameID, buffer, offset, size);
+        }
+
+        public void SetRayTracingConstantBufferParam(RayTracingShader rayTracingShader, string name, ComputeBuffer buffer, int offset, int size)
+        {
+            Internal_SetRayTracingConstantComputeBufferParam(rayTracingShader, Shader.PropertyToID(name), buffer, offset, size);
+        }
+
+        public void SetRayTracingConstantBufferParam(RayTracingShader rayTracingShader, int nameID, GraphicsBuffer buffer, int offset, int size)
+        {
+            Internal_SetRayTracingConstantGraphicsBufferParam(rayTracingShader, nameID, buffer, offset, size);
+        }
+
+        public void SetRayTracingConstantBufferParam(RayTracingShader rayTracingShader, string name, GraphicsBuffer buffer, int offset, int size)
+        {
+            Internal_SetRayTracingConstantGraphicsBufferParam(rayTracingShader, Shader.PropertyToID(name), buffer, offset, size);
         }
 
         public void SetRayTracingTextureParam(RayTracingShader rayTracingShader, string name, RenderTargetIdentifier rt)
@@ -357,14 +403,18 @@ namespace UnityEngine.Rendering
             Internal_DispatchRays(rayTracingShader, rayGenName, width, height, depth, camera);
         }
 
+        public void GenerateMips(RenderTargetIdentifier rt)
+        {
+            ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
+
+            Internal_GenerateMips(rt);
+        }
+
         public void GenerateMips(RenderTexture rt)
         {
             if (rt == null)
                 throw new ArgumentNullException("rt");
-
-            ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
-
-            Internal_GenerateMips(rt);
+            GenerateMips(new RenderTargetIdentifier(rt));
         }
 
         public void ResolveAntiAliasedSurface(RenderTexture rt, RenderTexture target = null)

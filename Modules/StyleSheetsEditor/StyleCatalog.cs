@@ -107,6 +107,10 @@ namespace UnityEditor.StyleSheets
         public readonly static int borderTopStyle = "border-top-style".GetHashCode();
         public readonly static int borderTopWidth = "border-top-width".GetHashCode();
         public readonly static int borderWidth = "border-width".GetHashCode();
+        public readonly static int borderTopLeftRadius = "border-top-left-radius".GetHashCode();
+        public readonly static int borderTopRightRadius = "border-top-right-radius".GetHashCode();
+        public readonly static int borderBottomLeftRadius = "border-bottom-left-radius".GetHashCode();
+        public readonly static int borderBottomRightRadius = "border-bottom-right-radius".GetHashCode();
         public readonly static int clear = "clear".GetHashCode();
         public readonly static int clip = "clip".GetHashCode();
         public readonly static int color = "color".GetHashCode();
@@ -283,6 +287,16 @@ namespace UnityEditor.StyleSheets
                 }
             }
         }
+
+        public bool incomplete => top == float.MaxValue || right == float.MaxValue || bottom == float.MaxValue || left == float.MaxValue;
+
+        internal StyleRect @fixed => new StyleRect
+        {
+            top = top == float.MaxValue ? 0 : top,
+            right = right == float.MaxValue ? 0 : right,
+            bottom = bottom == float.MaxValue ? 0 : bottom,
+            left = left == float.MaxValue ? 0 : left
+        };
 
         [FieldOffset(0)] public float top;
         [FieldOffset(4)] public float right;
@@ -588,7 +602,7 @@ namespace UnityEditor.StyleSheets
     }
 
     [DebuggerDisplay("name = {name}")]
-    internal struct StyleBlock
+    internal readonly struct StyleBlock
     {
         public readonly int name;
         public readonly StyleState[] states;
@@ -694,10 +708,7 @@ namespace UnityEditor.StyleSheets
 
         public StyleRect GetRect(string key, StyleRect defaultValue = default(StyleRect))
         {
-            var bufferIndex = GetValueIndex(key, StyleValue.Type.Rect);
-            if (bufferIndex == -1)
-                return defaultValue;
-            return catalog.buffers.rects[bufferIndex];
+            return GetRect(key.GetHashCode(), defaultValue);
         }
 
         public int GetInt(int key, int defaultValue = 0)
@@ -745,7 +756,7 @@ namespace UnityEditor.StyleSheets
             public static Texture2D GetTextureByDPIScale(string resourcePath, bool autoScale, float systemScale)
             {
                 Texture2D tex = null;
-                int scale = Mathf.RoundToInt(systemScale);
+                int scale = Mathf.CeilToInt(systemScale);
 
                 if (autoScale && systemScale > 1f)
                 {
@@ -945,6 +956,11 @@ namespace UnityEditor.StyleSheets
             return defaultValue;
         }
 
+        public bool IsFunction(int key)
+        {
+            return GetValueIndex(key, StyleValue.Type.Function) != -1;
+        }
+
         public T Execute<T>(int key, Func<StyleFunctionCall, T> callback)
         {
             var index = GetValueIndex(key, StyleValue.Type.Function);
@@ -1031,6 +1047,22 @@ namespace UnityEditor.StyleSheets
             }
             return -1;
         }
+
+        internal static int GetValueIndex(int hash, IEnumerable<StyleValue> values, StyleValue.Type type, StyleState stateFlag)
+        {
+            foreach (var v in values)
+            {
+                if (v.key != hash)
+                    continue;
+                if (type != StyleValue.Type.Any && v.type != type)
+                    continue;
+
+                if (v.state == stateFlag)
+                    return v.index;
+            }
+
+            return -1;
+        }
     }
 
     internal class StyleCatalog
@@ -1073,7 +1105,7 @@ namespace UnityEditor.StyleSheets
         {
             writer.Write(buffer.Length);
             foreach (var i in buffer)
-                writer.Write(i);
+                writer.Write(i ?? String.Empty);
         }
 
         private float[] ReadNumberBuffer(BinaryReader reader)
@@ -1306,7 +1338,7 @@ namespace UnityEditor.StyleSheets
             return true;
         }
 
-        const int k_CacheVersion = 1;
+        const int k_CacheVersion = 4;
         public void Save(BinaryWriter writer)
         {
             // version
@@ -1339,6 +1371,31 @@ namespace UnityEditor.StyleSheets
             return FindStyleIndex(key, m_Blocks);
         }
 
+        public static int FindStyleIndex(int key, StyleBlock[] blocks)
+        {
+            if (blocks == null || blocks.Length == 0)
+                return -1;
+
+            int low = 0;
+            int high = blocks.Length - 1;
+            int middle = (low + high + 1) / 2;
+            do
+            {
+                int currentKey = blocks[middle].name;
+                if (key == currentKey)
+                    return middle;
+
+                if (key < currentKey)
+                    high = middle - 1;
+                else
+                    low = middle + 1;
+                middle = (low + high + 1) / 2;
+            }
+            while (low <= high);
+
+            return -1;
+        }
+
         public static int FindStyleIndex(int key, IList<StyleBlock> blocks)
         {
             if (blocks == null || blocks.Count == 0)
@@ -1366,7 +1423,7 @@ namespace UnityEditor.StyleSheets
 
         public StyleBlock GetStyle(int selectorKey, params StyleState[] states)
         {
-            int location = FindStyleIndex(selectorKey);
+            int location = FindStyleIndex(selectorKey, m_Blocks);
             if (location != -1)
             {
                 var foundStyle = m_Blocks[location];
@@ -1392,7 +1449,14 @@ namespace UnityEditor.StyleSheets
 
         public void Load(IEnumerable<string> paths)
         {
-            var sheets = paths.Select(p => EditorResources.Load<UnityEngine.Object>(p, false) as StyleSheet)
+            var sheets = paths.Select(p =>
+            {
+                var x = EditorResources.Load<UnityEngine.Object>(p, false) as StyleSheet;
+
+                if (x == null)
+                    Debug.Log("Could not load " + p);
+                return x;
+            })
                 .Where(s => s != null).Distinct();
 
             Load(sheets);
@@ -1499,6 +1563,14 @@ namespace UnityEditor.StyleSheets
             return key;
         }
 
+        private string GetKeyName(int key)
+        {
+            string name;
+            if (m_NameCollisionTable.TryGetValue(key, out name))
+                return name;
+            return "<unknown>";
+        }
+
         private static StyleValue[] MergeValues(IEnumerable<StyleValue> values, IEnumerable<StyleValue> newValues)
         {
             var mergedBlockValues = new List<StyleValue>(values);
@@ -1513,9 +1585,8 @@ namespace UnityEditor.StyleSheets
                 for (int j = 0; j < mergedBlockValues.Count; ++j)
                 {
                     var blockValue = mergedBlockValues[j];
-                    if (newValue.key == blockValue.key && newValue.state == blockValue.state)
+                    if (newValue.key == blockValue.key && newValue.state == blockValue.state && blockValue.type == newValue.type)
                     {
-                        blockValue.type = newValue.type;
                         blockValue.index = newValue.index;
                         mergedBlockValues[j] = blockValue;
                         valueMerged = true;
@@ -1530,7 +1601,41 @@ namespace UnityEditor.StyleSheets
             return mergedBlockValues;
         }
 
-        private bool CompileElement(string name, IList<StyleBlock> blocks, StyleValue[] values)
+        private void CompileRects(StyleBlock block, StyleValue[] values, IList<StyleRect> rects)
+        {
+            // Fix rect default values with normal state.
+            foreach (var v in values)
+            {
+                if (v.type != StyleValue.Type.Rect)
+                    continue;
+
+                var rect = rects[v.index];
+                if (!rect.incomplete)
+                    continue;
+
+                if (v.state == StyleState.normal)
+                    continue;
+
+                // Merge missing values with normal state or default
+                var normalRectBufferIndex = StyleBlock.GetValueIndex(v.key, block.values, StyleValue.Type.Rect, StyleState.normal);
+                if (normalRectBufferIndex == -1)
+                {
+                    rects[v.index] = rect.@fixed;
+                    continue;
+                }
+
+                var normalRect = rects[normalRectBufferIndex];
+                rects[v.index] = new StyleRect
+                {
+                    top = rect.top == float.MaxValue ? normalRect.top : rect.top,
+                    right = rect.right == float.MaxValue ? normalRect.right : rect.right,
+                    bottom = rect.bottom == float.MaxValue ? normalRect.bottom : rect.bottom,
+                    left = rect.left == float.MaxValue ? normalRect.left : rect.left,
+                }.@fixed;
+            }
+        }
+
+        private bool CompileElement(string name, IList<StyleBlock> blocks, StyleValue[] values, IList<StyleRect> rects)
         {
             int key = GetNameKey(name);
 
@@ -1541,7 +1646,10 @@ namespace UnityEditor.StyleSheets
                 return true;
             }
 
-            var mergedBlockValues = MergeValues(blocks[existingStyleIndex].values, values);
+            var block = blocks[existingStyleIndex];
+            CompileRects(block, values, rects);
+
+            var mergedBlockValues = MergeValues(block.values, values);
             blocks[existingStyleIndex] = new StyleBlock(key, k_NoState, mergedBlockValues, this);
             return false;
         }
@@ -1583,8 +1691,15 @@ namespace UnityEditor.StyleSheets
 
                 values = ExpandValues(values, numbers, colors, strings, rects, groups);
 
-                if (CompileElement(blockName, blocks, values.ToArray()))
+                if (CompileElement(blockName, blocks, values.ToArray(), rects))
                     blocks.Sort((l, r) => l.name.CompareTo(r.name));
+
+                // Fix rects
+                for (int r = 0; r < rects.Count; ++r)
+                {
+                    if (rects[r].incomplete)
+                        rects[r] = rects[r].@fixed;
+                }
             }
         }
 
@@ -1594,6 +1709,7 @@ namespace UnityEditor.StyleSheets
             var states = values.Select(v => v.state).Distinct().ToArray();
 
             // Rects
+            values = ExpandRect(states, values, numbers, rects, StyleCatalogKeyword.position, StyleCatalogKeyword.top, StyleCatalogKeyword.right, StyleCatalogKeyword.bottom, StyleCatalogKeyword.left);
             values = ExpandRect(states, values, numbers, rects, StyleCatalogKeyword.margin, StyleCatalogKeyword.marginTop, StyleCatalogKeyword.marginRight, StyleCatalogKeyword.marginBottom, StyleCatalogKeyword.marginLeft);
             values = ExpandRect(states, values, numbers, rects, StyleCatalogKeyword.padding, StyleCatalogKeyword.paddingTop, StyleCatalogKeyword.paddingRight, StyleCatalogKeyword.paddingBottom, StyleCatalogKeyword.paddingLeft);
             values = ExpandRect(states, values, numbers, rects, "-unity-overflow".GetHashCode(), "-unity-overflow-top".GetHashCode(), "-unity-overflow-right".GetHashCode(), "-unity-overflow-bottom".GetHashCode(), "-unity-overflow-left".GetHashCode());
@@ -1601,6 +1717,10 @@ namespace UnityEditor.StyleSheets
 
             // Lines
             values = ExpandLine(states, values, numbers, colors, strings, rects, groups, StyleCatalogKeyword.border, StyleCatalogKeyword.borderWidth, StyleCatalogKeyword.borderStyle, StyleCatalogKeyword.borderColor);
+
+            // Extended styles
+            values = ExpandRect(states, values, numbers, rects, StyleCatalogKeyword.borderWidth, StyleCatalogKeyword.borderTopWidth, StyleCatalogKeyword.borderRightWidth, StyleCatalogKeyword.borderBottomWidth, StyleCatalogKeyword.borderLeftWidth);
+            values = ExpandRect(states, values, numbers, rects, StyleCatalogKeyword.borderRadius, StyleCatalogKeyword.borderTopLeftRadius, StyleCatalogKeyword.borderTopRightRadius, StyleCatalogKeyword.borderBottomRightRadius, StyleCatalogKeyword.borderBottomLeftRadius);
 
             return values;
         }
@@ -1614,6 +1734,7 @@ namespace UnityEditor.StyleSheets
             //using (new Profiling.EditorPerformanceTracker("BuildCatalog.ExpandLine"))
             for (int stateIndex = 0; stateIndex < states.Length; ++stateIndex)
             {
+                bool applyValues = false;
                 var currentState = states[stateIndex];
                 var lineValues = new List<StyleValue>();
                 var line = new StyleLine();
@@ -1639,18 +1760,23 @@ namespace UnityEditor.StyleSheets
                         continue;
                     }
 
-                    StyleValueGroup vg = new StyleValueGroup(borderKey, 3)
-                    {
-                        v1 = new StyleValue {key = borderWidthKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, line.width)},
-                        v2 = new StyleValue {key = borderStyleKey, state = currentState, type = StyleValue.Type.Text, index = SetIndex(strings, line.style)},
-                        v3 = new StyleValue {key = borderColorKey, state = currentState, type = StyleValue.Type.Color, index = SetIndex(colors, line.color)}
-                    };
-
-                    lineValues.Add(new StyleValue { key = borderKey, state = currentState, type = StyleValue.Type.Group, index = SetIndex(groups, vg) });
-                    lineValues.Add(vg.v1);
-                    lineValues.Add(vg.v2);
-                    lineValues.Add(vg.v3);
+                    applyValues = true;
                 }
+
+                if (!applyValues)
+                    continue;
+
+                StyleValueGroup vg = new StyleValueGroup(borderKey, 3)
+                {
+                    v1 = new StyleValue { key = borderWidthKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, line.width) },
+                    v2 = new StyleValue { key = borderStyleKey, state = currentState, type = StyleValue.Type.Text, index = SetIndex(strings, line.style) },
+                    v3 = new StyleValue { key = borderColorKey, state = currentState, type = StyleValue.Type.Color, index = SetIndex(colors, line.color) }
+                };
+
+                lineValues.Add(new StyleValue { key = borderKey, state = currentState, type = StyleValue.Type.Group, index = SetIndex(groups, vg) });
+                lineValues.Add(vg.v1);
+                lineValues.Add(vg.v2);
+                lineValues.Add(vg.v3);
 
                 if (lineValues.Count > 0)
                     values = MergeListValues(values, lineValues);
@@ -1665,11 +1791,10 @@ namespace UnityEditor.StyleSheets
             if (!ExpandHasMembers(values, rectKey, topKey, rightKey, bottomKey, leftKey))
                 return values;
 
-            //using (new Profiling.EditorPerformanceTracker("BuildCatalog.ExpandRect"))
             for (int stateIndex = 0; stateIndex < states.Length; ++stateIndex)
             {
+                bool applyValues = false;
                 var currentState = states[stateIndex];
-                var rectValues = new List<StyleValue>();
                 var rect = new StyleRect { top = float.MaxValue, right = float.MaxValue, bottom = float.MaxValue, left = float.MaxValue };
                 for (int i = 0; i < values.Count; ++i)
                 {
@@ -1678,6 +1803,14 @@ namespace UnityEditor.StyleSheets
                         continue;
 
                     if (value.key == rectKey && value.type == StyleValue.Type.Rect) rect = rects[value.index];
+                    else if (value.key == rectKey && value.type == StyleValue.Type.Number)
+                    {
+                        var defaultValue = numbers[value.index];
+                        if (rect.top == float.MaxValue) rect.top = defaultValue;
+                        if (rect.right == float.MaxValue) rect.right = defaultValue;
+                        if (rect.bottom == float.MaxValue) rect.bottom = defaultValue;
+                        if (rect.left == float.MaxValue) rect.left = defaultValue;
+                    }
                     else if (value.key == topKey && value.type == StyleValue.Type.Number) rect.top = numbers[value.index];
                     else if (value.key == rightKey && value.type == StyleValue.Type.Number) rect.right = numbers[value.index];
                     else if (value.key == bottomKey && value.type == StyleValue.Type.Number) rect.bottom = numbers[value.index];
@@ -1688,30 +1821,27 @@ namespace UnityEditor.StyleSheets
                         continue;
                     }
 
-                    if (rect.left != float.MaxValue || rect.right != float.MaxValue || rect.top != float.MaxValue || rect.bottom != float.MaxValue)
-                    {
-                        var validRect = new StyleRect
-                        {
-                            top = rect.top == float.MaxValue ? 0 : rect.top,
-                            right = rect.right == float.MaxValue ? 0 : rect.right,
-                            bottom = rect.bottom == float.MaxValue ? 0 : rect.bottom,
-                            left = rect.left == float.MaxValue ? 0 : rect.left
-                        };
-                        rectValues.Add(new StyleValue { key = rectKey, state = currentState, type = StyleValue.Type.Rect, index = SetIndex(rects, validRect) });
-                    }
-
-                    if (rect.top != float.MaxValue)
-                        rectValues.Add(new StyleValue { key = topKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.top) });
-
-                    if (rect.right != float.MaxValue)
-                        rectValues.Add(new StyleValue { key = rightKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.right) });
-
-                    if (rect.bottom != float.MaxValue)
-                        rectValues.Add(new StyleValue { key = bottomKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.bottom) });
-
-                    if (rect.left != float.MaxValue)
-                        rectValues.Add(new StyleValue { key = leftKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.left) });
+                    applyValues = true;
                 }
+
+                if (!applyValues)
+                    continue;
+
+                var rectValues = new List<StyleValue>();
+                if (rect.left != float.MaxValue || rect.right != float.MaxValue || rect.top != float.MaxValue || rect.bottom != float.MaxValue)
+                    rectValues.Add(new StyleValue { key = rectKey, state = currentState, type = StyleValue.Type.Rect, index = SetIndex(rects, rect) });
+
+                if (rect.top != float.MaxValue)
+                    rectValues.Add(new StyleValue { key = topKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.top) });
+
+                if (rect.right != float.MaxValue)
+                    rectValues.Add(new StyleValue { key = rightKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.right) });
+
+                if (rect.bottom != float.MaxValue)
+                    rectValues.Add(new StyleValue { key = bottomKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.bottom) });
+
+                if (rect.left != float.MaxValue)
+                    rectValues.Add(new StyleValue { key = leftKey, state = currentState, type = StyleValue.Type.Number, index = SetIndex(numbers, rect.left) });
 
                 if (rectValues.Count > 0)
                     values = MergeListValues(values, rectValues);
@@ -1953,8 +2083,8 @@ namespace UnityEditor.StyleSheets
             // All the blocks are the same, compare their values;
             foreach (var catBlock in catalog.m_Blocks)
             {
-                var blockName = m_NameCollisionTable[catBlock.name];
-                var block = m_Blocks[FindStyleIndex(catBlock.name)];
+                var blockName = GetKeyName(catBlock.name);
+                var block = m_Blocks[FindStyleIndex(catBlock.name, m_Blocks)];
 
                 if (catBlock.name != block.name)
                 {
@@ -1978,18 +2108,18 @@ namespace UnityEditor.StyleSheets
                         var value2Index = GetComparableValue(value1, catBlock);
                         if (value2Index == -1)
                         {
-                            sb.AppendLine($"Property {m_NameCollisionTable[value1.key]} not found in block {blockName}");
+                            sb.AppendLine($"Property {GetKeyName(value1.key)} not found in block {blockName}");
                             continue;
                         }
 
                         var value2 = catBlock.values[value2Index];
                         if (value1.type != value2.type)
                         {
-                            sb.AppendLine($"Property: {m_NameCollisionTable[value1.key]} has different type in block {blockName}");
+                            sb.AppendLine($"Property: {GetKeyName(value1.key)} has different type in block {blockName}");
                         }
                         else if (!CompareValue(block, value1, catBlock, value2))
                         {
-                            sb.AppendLine($"Property: {m_NameCollisionTable[value1.key]} has different value in block {blockName}");
+                            sb.AppendLine($"Property: {GetKeyName(value1.key)} has different value in block {blockName}");
                         }
                     }
                 }
@@ -2011,7 +2141,7 @@ namespace UnityEditor.StyleSheets
                         sb.AppendLine(title);
                         sameStyles = false;
                     }
-                    sb.AppendLine("    " + m_NameCollisionTable[block.name]);
+                    sb.AppendLine("    " + GetKeyName(block.name));
                 }
             }
 
@@ -2023,7 +2153,7 @@ namespace UnityEditor.StyleSheets
             for (var valueIndex = 0; valueIndex < block.values.Length; ++valueIndex)
             {
                 var v2 = block.values[valueIndex];
-                if (v1.key == v2.key && v1.state == v2.state)
+                if (v1.key == v2.key && v1.state == v2.state && v1.type == v2.type)
                 {
                     return valueIndex;
                 }

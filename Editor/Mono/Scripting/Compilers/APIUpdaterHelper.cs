@@ -53,21 +53,25 @@ namespace UnityEditor.Scripting.Compilers
 
         public static void UpdateScripts(string responseFile, string sourceExtension, string[] sourceFiles)
         {
-            if (!APIUpdaterManager.WaitForVCSServerConnection(true))
-            {
-                return;
-            }
-
+            bool anyFileInAssetsFolder = false;
             var pathMappingsFilePath = Path.GetTempFileName();
-
             var filePathMappings = new List<string>(sourceFiles.Length);
             foreach (var source in sourceFiles)
             {
-                var f = CommandLineFormatter.PrepareFileName(source);
-                f = Paths.UnifyDirectorySeparator(f);
+                anyFileInAssetsFolder |= (source.IndexOf("Assets/", StringComparison.OrdinalIgnoreCase) != -1);
 
-                if (f != source)
+                var f = CommandLineFormatter.PrepareFileName(source);
+                if (f != source) // assume path represents a virtual path and needs to be mapped.
+                {
+                    f = Paths.UnifyDirectorySeparator(f);
                     filePathMappings.Add(f + " => " + source);
+                }
+            }
+
+            // Only try to connect to VCS if there are files under VCS that need to be updated
+            if (anyFileInAssetsFolder && !APIUpdaterManager.WaitForVCSServerConnection(true))
+            {
+                return;
             }
 
             File.WriteAllLines(pathMappingsFilePath, filePathMappings.ToArray());
@@ -81,13 +85,13 @@ namespace UnityEditor.Scripting.Compilers
                     pathMappingsFilePath,
                     responseFile);
 
-                RunUpdatingProgram("ScriptUpdater.exe", arguments, tempOutputPath);
+                RunUpdatingProgram("ScriptUpdater.exe", arguments, tempOutputPath, anyFileInAssetsFolder);
             }
 #pragma warning disable CS0618 // Type or member is obsolete
             catch (Exception ex) when (!(ex is StackOverflowException) && !(ex is ExecutionEngineException))
 #pragma warning restore CS0618 // Type or member is obsolete
             {
-                Debug.LogError("[API Updater] ScriptUpdater threw an exception. Check the following message in the log.");
+                Debug.LogError(L10n.Tr("[API Updater] ScriptUpdater threw an exception. Check the following message in the log."));
                 Debug.LogException(ex);
 
                 APIUpdaterManager.ReportExpectedUpdateFailure();
@@ -107,25 +111,27 @@ namespace UnityEditor.Scripting.Compilers
                 + responseFile;  // Response file is always relative and without spaces, no need to quote.
         }
 
-        static void RunUpdatingProgram(string executable, string arguments, string tempOutputPath)
+        static void RunUpdatingProgram(string executable, string arguments, string tempOutputPath, bool anyFileInAssetsFolder)
         {
             var scriptUpdaterPath = EditorApplication.applicationContentsPath + "/Tools/ScriptUpdater/" + executable; // ManagedProgram will quote this path for us.
-            var program = new ManagedProgram(MonoInstallationFinder.GetMonoInstallation("MonoBleedingEdge"), null, scriptUpdaterPath, arguments, false, null);
-            program.LogProcessStartInfo();
-            program.Start();
-            program.WaitForExit();
+            using (var program = new ManagedProgram(MonoInstallationFinder.GetMonoInstallation("MonoBleedingEdge"), null, scriptUpdaterPath, arguments, false, null))
+            {
+                program.LogProcessStartInfo();
+                program.Start();
+                program.WaitForExit();
 
-            Console.WriteLine(string.Join(Environment.NewLine, program.GetStandardOutput()));
+                Console.WriteLine(string.Join(Environment.NewLine, program.GetStandardOutput()));
 
-            HandleUpdaterReturnValue(program, tempOutputPath);
+                HandleUpdaterReturnValue(program, tempOutputPath, anyFileInAssetsFolder);
+            }
         }
 
-        static void HandleUpdaterReturnValue(ManagedProgram program, string tempOutputPath)
+        static void HandleUpdaterReturnValue(ManagedProgram program, string tempOutputPath, bool anyFileInAssetsFolder)
         {
             if (program.ExitCode == 0)
             {
                 Console.WriteLine(string.Join(Environment.NewLine, program.GetErrorOutput()));
-                CopyUpdatedFiles(tempOutputPath);
+                CopyUpdatedFiles(tempOutputPath, anyFileInAssetsFolder);
                 return;
             }
 
@@ -138,16 +144,16 @@ namespace UnityEditor.Scripting.Compilers
 
         static void ReportAPIUpdaterCrash(IEnumerable<string> errorOutput)
         {
-            Debug.LogErrorFormat("Failed to run script updater.{0}Please, report a bug to Unity with these details{0}{1}", Environment.NewLine, errorOutput.Aggregate("", (acc, curr) => acc + Environment.NewLine + "\t" + curr));
+            Debug.LogErrorFormat(L10n.Tr("Failed to run script updater.{0}Please, report a bug to Unity with these details{0}{1}"), Environment.NewLine, errorOutput.Aggregate("", (acc, curr) => acc + Environment.NewLine + "\t" + curr));
         }
 
         static void ReportAPIUpdaterFailure(IEnumerable<string> errorOutput)
         {
-            var msg = string.Format("APIUpdater encountered some issues and was not able to finish.{0}{1}", Environment.NewLine, errorOutput.Aggregate("", (acc, curr) => acc + Environment.NewLine + "\t" + curr));
+            var msg = string.Format(L10n.Tr("APIUpdater encountered some issues and was not able to finish.{0}{1}"), Environment.NewLine, errorOutput.Aggregate("", (acc, curr) => acc + Environment.NewLine + "\t" + curr));
             APIUpdaterManager.ReportGroupedAPIUpdaterFailure(msg);
         }
 
-        static void CopyUpdatedFiles(string tempOutputPath)
+        static void CopyUpdatedFiles(string tempOutputPath, bool anyFileInAssetsFolder)
         {
             if (!Directory.Exists(tempOutputPath))
                 return;
@@ -155,7 +161,7 @@ namespace UnityEditor.Scripting.Compilers
             var files = Directory.GetFiles(tempOutputPath, "*.*", SearchOption.AllDirectories);
 
             var pathsRelativeToTempOutputPath = files.Select(path => path.Replace(tempOutputPath, ""));
-            if (Provider.enabled && !CheckoutAndValidateVCSFiles(pathsRelativeToTempOutputPath))
+            if (anyFileInAssetsFolder && Provider.enabled && !CheckoutAndValidateVCSFiles(pathsRelativeToTempOutputPath))
                 return;
 
             var destRelativeFilePaths = files.Select(sourceFileName => sourceFileName.Substring(tempOutputPath.Length)).ToArray();
@@ -201,7 +207,7 @@ namespace UnityEditor.Scripting.Compilers
                     if (filesFromReadOnlyPackages.Count > 0)
                     {
                         Console.WriteLine(
-                            "[API Updater] At least one file from a readonly package and one file from other location have been updated (that is not expected).{0}File from other location: {0}\t{1}{0}Files from packages already processed: {0}{2}",
+                            L10n.Tr("[API Updater] At least one file from a readonly package and one file from other location have been updated (that is not expected).{0}File from other location: {0}\t{1}{0}Files from packages already processed: {0}{2}"),
                             Environment.NewLine,
                             path,
                             string.Join($"{Environment.NewLine}\t", filesFromReadOnlyPackages.ToArray()));
@@ -216,7 +222,7 @@ namespace UnityEditor.Scripting.Compilers
                     return;
                 }
 
-                if (packageInfo.source == PackageSource.Registry || packageInfo.source == PackageSource.Git)
+                if (packageInfo.source != PackageSource.Local && packageInfo.source != PackageSource.Embedded)
                 {
                     // Packman creates a (readonly) cache under Library/PackageCache in a way that even if multiple projects uses the same package each one should have its own
                     // private cache so it is safe for the updater to simply remove the readonly attribute and update the file.
@@ -234,6 +240,8 @@ namespace UnityEditor.Scripting.Compilers
 
                 File.SetAttributes(relativeFilePath, fileAttributes & ~FileAttributes.ReadOnly);
             }
+
+            PackageManager.ImmutableAssets.SetAssetsAllowedToBeModified(filesFromReadOnlyPackages.ToArray());
         }
 
         internal static bool CheckReadOnlyFiles(string[] destRelativeFilePaths)
@@ -243,7 +251,7 @@ namespace UnityEditor.Scripting.Compilers
             var readOnlyFiles = destRelativeFilePaths.Where(path => (File.GetAttributes(path) & FileAttributes.ReadOnly) == FileAttributes.ReadOnly);
             if (readOnlyFiles.Any())
             {
-                Debug.LogErrorFormat("[API Updater] Files cannot be updated (files not writable): {0}", readOnlyFiles.Select(path => path).Aggregate((acc, curr) => acc + Environment.NewLine + "\t" + curr));
+                Debug.LogErrorFormat(L10n.Tr("[API Updater] Files cannot be updated (files not writable): {0}"), readOnlyFiles.Select(path => path).Aggregate((acc, curr) => acc + Environment.NewLine + "\t" + curr));
                 APIUpdaterManager.ReportExpectedUpdateFailure();
                 return false;
             }
@@ -256,37 +264,22 @@ namespace UnityEditor.Scripting.Compilers
             // We're only interested in files that would be under VCS, i.e. project
             // assets or local packages. Incoming paths might use backward slashes; replace with
             // forward ones as that's what Unity/VCS functions operate on.
-            files = files.Select(f => f.Replace('\\', '/')).Where(Provider.PathIsVersioned).ToArray();
+            var versionedFiles = files.Select(f => f.Replace('\\', '/')).Where(Provider.PathIsVersioned).ToArray();
 
-            var assetList = new AssetList();
-            assetList.AddRange(files.Select(Provider.GetAssetByPath));
-
-            // Verify that all the files are also in assetList
-            // This is required to ensure the copy temp files to destination loop is only working on version controlled files
-            // Provider.GetAssetByPath() can fail i.e. the asset database GUID can not be found for the input asset path
-            foreach (var assetPath in files)
+            // Fail if the asset database GUID can not be found for the input asset path.
+            var assetPath = versionedFiles.FirstOrDefault(f => string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(f)));
+            if (assetPath != null)
             {
-                var foundAsset = assetList.Where(asset => (asset?.path == assetPath));
-                if (!foundAsset.Any())
-                {
-                    Debug.LogErrorFormat("[API Updater] Files cannot be updated (failed to add file to list): {0}", assetPath);
-                    APIUpdaterManager.ReportExpectedUpdateFailure();
-                    return false;
-                }
+                Debug.LogErrorFormat(L10n.Tr("[API Updater] Files cannot be updated (failed to add file to list): {0}"), assetPath);
+                APIUpdaterManager.ReportExpectedUpdateFailure();
+                return false;
             }
 
-            var checkoutTask = Provider.Checkout(assetList, CheckoutMode.Exact);
-            checkoutTask.Wait();
-
-            // Verify that all the files we need to operate on are now editable according to version control
-            // One of these states:
-            // 1) UnderVersionControl & CheckedOutLocal
-            // 2) UnderVersionControl & AddedLocal
-            // 3) !UnderVersionControl
-            var notEditable = assetList.Where(asset => asset.IsUnderVersionControl && !asset.IsState(Asset.States.CheckedOutLocal) && !asset.IsState(Asset.States.AddedLocal));
-            if (!checkoutTask.success || notEditable.Any())
+            var notEditableFiles = new List<string>();
+            if (!AssetDatabase.MakeEditable(versionedFiles, null, notEditableFiles))
             {
-                Debug.LogErrorFormat("[API Updater] Files cannot be updated (failed to check out): {0}", notEditable.Select(a => a.fullName + " (" + a.state + ")").Aggregate((acc, curr) => acc + Environment.NewLine + "\t" + curr));
+                var notEditableList = notEditableFiles.Aggregate(string.Empty, (text, file) => text + $"\n\t{file}");
+                Debug.LogErrorFormat(L10n.Tr("[API Updater] Files cannot be updated (failed to check out): {0}"), notEditableList);
                 APIUpdaterManager.ReportExpectedUpdateFailure();
                 return false;
             }
@@ -445,6 +438,8 @@ namespace UnityEditor.Scripting.Compilers
         {
             return string.Join(".", parts.ToArray());
         }
+
+        public string ToStringStartingWith(string prefix) => $"{prefix}.{ToString()}";
     }
 
     /*
@@ -543,6 +538,9 @@ namespace UnityEditor.Scripting.Compilers
             var curr = memberReferenceExpression;
             var last = memberReferenceExpression;
             bool matchesPosition = false;
+
+            //TODO: Can we avoid calling AddIdentifierPartsTakingAliasesIntoAccount() here? Reasoning is that we may not add the identifier to the list
+            //      see the condition outside the while.
             while (curr != null)
             {
                 if (!matchesPosition && MatchesPosition(curr.StartLocation, curr.EndLocation.Column))
@@ -553,14 +551,22 @@ namespace UnityEditor.Scripting.Compilers
                 curr = curr.TargetObject as MemberReferenceExpression;
             }
 
-            var lastIdentifier = last.TargetObject as IdentifierExpression;
-            if (lastIdentifier == null || (!matchesPosition && !MatchesPosition(lastIdentifier.StartLocation, lastIdentifier.EndLocation.Column)))
+            var root = last.TargetObject as IdentifierExpression;
+            // In some scenarios the compiler may not emit an error if an invalid namespace of a FNQ type reference is also imported (*using*). In this scenario the compiler only reports the invalid
+            // namespace in the *using statement*; in order to make sure all candidates indentifiers will be considered (added to the identifiers list) we need also check this scenario
+            // (method TypeDeclaredInOffendingNamespace()).
+            if (root == null || (!TypeDeclaredInOffendingNamespace(identifier.ToStringStartingWith(root.Identifier)) && !matchesPosition && !MatchesPosition(root.StartLocation, root.EndLocation.Column)))
                 return base.VisitMemberReferenceExpression(memberReferenceExpression, data);
 
-            AddIdentifierPartsTakingAliasesIntoAccount(ref identifier, lastIdentifier.Identifier);
+            AddIdentifierPartsTakingAliasesIntoAccount(ref identifier, root.Identifier);
             identifiers.Add(identifier);
 
             return null;
+        }
+
+        bool TypeDeclaredInOffendingNamespace(string candidateFQN)
+        {
+            return _isOffendingUsing && usings.Any(u => candidateFQN.StartsWith(u.Name));
         }
 
         public override object VisitUsing(Using @using, object data)
@@ -638,7 +644,7 @@ namespace UnityEditor.Scripting.Compilers
             identifiers.Add(identifier);
         }
 
-        private unsafe static string[] SplitIdentifier(string identifier)
+        private static string[] SplitIdentifier(string identifier)
         {
             int last = 0;
             var a = new List<string>();
@@ -646,11 +652,11 @@ namespace UnityEditor.Scripting.Compilers
             while (dotIndex != -1)
             {
                 var genericCloseBraceIndex = -1;
-                var genericOpenBranceIndex = identifier.IndexOf('<', last, dotIndex - last);
-                if (dotIndex > genericOpenBranceIndex && genericOpenBranceIndex != -1)
-                    genericCloseBraceIndex = FindClosingGenericBrance(identifier, genericOpenBranceIndex + 1);
+                var genericOpenBraceIndex = identifier.IndexOf('<', last, dotIndex - last);
+                if (dotIndex > genericOpenBraceIndex && genericOpenBraceIndex != -1)
+                    genericCloseBraceIndex = FindClosingGenericBrace(identifier, genericOpenBraceIndex + 1);
 
-                if (dotIndex < genericOpenBranceIndex || genericOpenBranceIndex == -1)
+                if (dotIndex < genericOpenBraceIndex || genericOpenBraceIndex == -1)
                 {
                     a.Add(identifier.Substring(last, dotIndex - last));
                     last = dotIndex + 1;
@@ -673,7 +679,7 @@ namespace UnityEditor.Scripting.Compilers
             return a.ToArray();
         }
 
-        private static int FindClosingGenericBrance(string identifier,  int startIndex)
+        private static int FindClosingGenericBrace(string identifier,  int startIndex)
         {
             var index = startIndex;
             byte balanceCount = 1;

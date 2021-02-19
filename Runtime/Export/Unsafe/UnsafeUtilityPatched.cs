@@ -80,9 +80,24 @@ namespace Unity.Collections.LowLevel.Unsafe
             throw new NotImplementedException("Patching this method failed");
         }
 
-        // minimum alignment of a struct
-        public static int AlignOf<T>() where T : struct
+        // Reinterprets reference as reference of different type.
+        public static ref T As<U, T>(ref U from)
         {
+            // @patched at compile time
+            throw new NotImplementedException("Patching this method failed");
+        }
+
+        // The address of the memory where the struct resides in memory
+        unsafe public static ref T AsRef<T>(void* ptr) where T : struct
+        {
+            // @patched at compile time
+            throw new NotImplementedException("Patching this method failed");
+        }
+
+        // The address of the memory where the struct resides in memory
+        unsafe public static ref T ArrayElementAsRef<T>(void* ptr, int index) where T : struct
+        {
+            // @patched at compile time
             throw new NotImplementedException("Patching this method failed");
         }
 

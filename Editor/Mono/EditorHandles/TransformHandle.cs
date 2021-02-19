@@ -99,7 +99,7 @@ namespace UnityEditor
                     1.4f,
                     1.5f,
                     false,
-                    false
+                    true
                 ),
                 new ScaleHandleParam(
                     ScaleHandleParam.Handle.XYZ,
@@ -155,7 +155,7 @@ namespace UnityEditor
                     1.4f,
                     1.5f,
                     false,
-                    false
+                    true
                 ),
                 new ScaleHandleParam(
                     ScaleHandleParam.Handle.XYZ | ScaleHandleParam.Handle.X | ScaleHandleParam.Handle.Y | ScaleHandleParam.Handle.Z,
@@ -184,7 +184,7 @@ namespace UnityEditor
                     1.4f,
                     1.5f,
                     false,
-                    false
+                    true
                 ),
                 new ScaleHandleParam(
                     0,
@@ -539,7 +539,6 @@ namespace UnityEditor
             {
                 if (ids.position.Has(GUIUtility.hotControl))
                 {
-                    workingRotation = TransformManipulator.mouseDownHandleRotation;
                     position = DoPositionHandle_Internal(ids.position, position, workingRotation, pParam);
                 }
                 else if (ids.rotation.Has(GUIUtility.hotControl))
@@ -576,12 +575,7 @@ namespace UnityEditor
             }
             else
             {
-                if (s_TransformHandle_RotationData.ContainsKey(ids.rotation))
-                {
-                    var data = s_TransformHandle_RotationData[ids.rotation];
-                    data.rotationStarted = false;
-                    s_TransformHandle_RotationData[ids.rotation] = data;
-                }
+                s_TransformHandle_RotationData.Remove(ids.rotation);
 
                 // Drawing only
                 DoRotationHandle(ids.rotation, workingRotation, position, rParam);

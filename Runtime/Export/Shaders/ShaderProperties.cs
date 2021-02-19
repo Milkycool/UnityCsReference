@@ -5,6 +5,9 @@
 using System;
 using UnityEngine.Bindings;
 using UnityEngine.Rendering;
+using System.Runtime.InteropServices;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace UnityEngine.Rendering
 {
@@ -30,6 +33,8 @@ namespace UnityEngine.Rendering
         HDR                         = 1 << 4,
         Gamma                       = 1 << 5,
         NonModifiableTextureData    = 1 << 6,
+        MainTexture                 = 1 << 7,
+        MainColor                   = 1 << 8,
     }
 }
 
@@ -58,7 +63,6 @@ namespace UnityEngine
         extern private static string GetPropertyTextureDefaultName([NotNull] Shader shader, int propertyIndex);
         [FreeFunction("ShaderScripting::FindTextureStack")]
         extern private static bool FindTextureStackImpl([NotNull] Shader s, int propertyIdx, out string stackName, out int layerIndex);
-
 
         private static void CheckPropertyIndex(Shader s, int propertyIndex)
         {

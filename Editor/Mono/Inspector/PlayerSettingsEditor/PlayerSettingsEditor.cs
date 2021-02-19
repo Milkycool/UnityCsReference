@@ -14,8 +14,8 @@ using System.IO;
 using System.Linq;
 using UnityEditor.Modules;
 using UnityEngine.Events;
+using UnityEngine.SceneManagement;
 using GraphicsDeviceType = UnityEngine.Rendering.GraphicsDeviceType;
-using VR = UnityEditorInternal.VR;
 using TargetAttributes = UnityEditor.BuildTargetDiscovery.TargetAttributes;
 using UnityEngine.Rendering;
 
@@ -79,6 +79,7 @@ namespace UnityEditor
             public static readonly GUIContent optimizationTitle = EditorGUIUtility.TrTextContent("Optimization");
             public static readonly GUIContent loggingTitle = EditorGUIUtility.TrTextContent("Stack Trace*");
             public static readonly GUIContent legacyTitle = EditorGUIUtility.TrTextContent("Legacy");
+            public static readonly GUIContent legacyXRTitle = EditorGUIUtility.TrTextContent("XR Settings (Deprecated)");
             public static readonly GUIContent publishingSettingsTitle = EditorGUIUtility.TrTextContent("Publishing Settings");
 
             public static readonly GUIContent bakeCollisionMeshes = EditorGUIUtility.TrTextContent("Prebake Collision Meshes*", "Bake collision data into the meshes on build time");
@@ -88,7 +89,8 @@ namespace UnityEditor
             public static readonly GUIContent iPhoneScriptCallOptimization = EditorGUIUtility.TrTextContent("Script Call Optimization*");
             public static readonly GUIContent enableInternalProfiler = EditorGUIUtility.TrTextContent("Enable Internal Profiler* (Deprecated)", "Internal profiler counters should be accessed by scripts using UnityEngine.Profiling::Profiler API.");
             public static readonly GUIContent stripUnusedMeshComponents = EditorGUIUtility.TrTextContent("Optimize Mesh Data*", "Remove unused mesh components");
-            public static readonly GUIContent enableFrameTimingStats = EditorGUIUtility.TrTextContent("Enable Frame Timing Stats", "Enable gathering of CPU/GPU frame timing statistics.");
+            public static readonly GUIContent mipStripping = EditorGUIUtility.TrTextContent("Texture MipMap Stripping*", "Remove unused texture levels from package builds, reducing package size on disk. Limits the texture quality settings to the highest mip that was included during the build.");
+            public static readonly GUIContent enableFrameTimingStats = EditorGUIUtility.TrTextContent("Frame Timing Stats", "Enable gathering of CPU/GPU frame timing statistics.");
             public static readonly GUIContent useOSAutoRotation = EditorGUIUtility.TrTextContent("Use Animated Autorotation", "If set OS native animated autorotation method will be used. Otherwise orientation will be changed immediately.");
             public static readonly GUIContent UIPrerenderedIcon = EditorGUIUtility.TrTextContent("Prerendered Icon");
             public static readonly GUIContent defaultScreenWidth = EditorGUIUtility.TrTextContent("Default Screen Width");
@@ -135,6 +137,7 @@ namespace UnityEditor
             public static readonly GUIContent[] memorylessModeNames = { EditorGUIUtility.TrTextContent("Unused"), EditorGUIUtility.TrTextContent("Forced"), EditorGUIUtility.TrTextContent("Automatic")};
             public static readonly GUIContent vulkanEnableSetSRGBWrite = EditorGUIUtility.TrTextContent("SRGB Write Mode*", "If set, enables Graphics.SetSRGBWrite() for toggling sRGB write mode during the frame but may decrease performance especially on tiled GPUs.");
             public static readonly GUIContent vulkanNumSwapchainBuffers = EditorGUIUtility.TrTextContent("Number of swapchain buffers");
+            public static readonly GUIContent vulkanEnablePreTransform = EditorGUIUtility.TrTextContent("Apply display rotation during rendering");
             public static readonly GUIContent mTRendering = EditorGUIUtility.TrTextContent("Multithreaded Rendering*");
             public static readonly GUIContent staticBatching = EditorGUIUtility.TrTextContent("Static Batching");
             public static readonly GUIContent dynamicBatching = EditorGUIUtility.TrTextContent("Dynamic Batching");
@@ -162,7 +165,10 @@ namespace UnityEditor
             public static readonly GUIContent require32 = EditorGUIUtility.TrTextContent("Require ES3.2");
             public static readonly GUIContent skinOnGPU = EditorGUIUtility.TrTextContent("GPU Skinning*", "Use DX11/ES3 GPU Skinning");
             public static readonly GUIContent skinOnGPUCompute = EditorGUIUtility.TrTextContent("Compute Skinning*", "Use Compute pipeline for Skinning");
-            public static readonly GUIContent scriptingDefineSymbols = EditorGUIUtility.TrTextContent("Scripting Define Symbols");
+            public static readonly GUIContent scriptingDefineSymbols = EditorGUIUtility.TrTextContent("Scripting Define Symbols", "Preprocessor defines passed to the C# script compiler");
+            public static readonly GUIContent scriptingDefineSymbolsApply = EditorGUIUtility.TrTextContent("Apply");
+            public static readonly GUIContent scriptingDefineSymbolsApplyRevert = EditorGUIUtility.TrTextContent("Revert");
+            public static readonly GUIContent scriptingDefineSymbolsCopyDefines = EditorGUIUtility.TrTextContent("Copy Defines", "Copy applied defines");
             public static readonly GUIContent scriptingBackend = EditorGUIUtility.TrTextContent("Scripting Backend");
             public static readonly GUIContent managedStrippingLevel = EditorGUIUtility.TrTextContent("Managed Stripping Level", "If scripting backend is IL2CPP, managed stripping can't be disabled.");
             public static readonly GUIContent il2cppCompilerConfiguration = EditorGUIUtility.TrTextContent("C++ Compiler Configuration");
@@ -178,17 +184,25 @@ namespace UnityEditor
             public static readonly GUIContent apiCompatibilityLevel_NET_2_0_Subset = EditorGUIUtility.TrTextContent(".NET 2.0 Subset");
             public static readonly GUIContent apiCompatibilityLevel_NET_4_6 = EditorGUIUtility.TrTextContent(".NET 4.x");
             public static readonly GUIContent apiCompatibilityLevel_NET_Standard_2_0 = EditorGUIUtility.TrTextContent(".NET Standard 2.0");
+            public static readonly GUIContent scriptCompilationTitle = EditorGUIUtility.TrTextContent("Script Compilation");
             public static readonly GUIContent allowUnsafeCode = EditorGUIUtility.TrTextContent("Allow 'unsafe' Code", "Allow compilation of unsafe code for predefined assemblies (Assembly-CSharp.dll, etc.)");
+            public static readonly GUIContent useDeterministicCompilation = EditorGUIUtility.TrTextContent("Use Deterministic Compilation", "Compile with -deterministic compilation flag");
+            public static readonly GUIContent useReferenceAssembclies = EditorGUIUtility.TrTextContent("Use Roslyn Reference Assemblies", "Skips compilation of assembly references if the metadata of the modified assembly does not change.");
             public static readonly GUIContent activeInputHandling = EditorGUIUtility.TrTextContent("Active Input Handling*");
             public static readonly GUIContent[] activeInputHandlingOptions = new GUIContent[] { EditorGUIUtility.TrTextContent("Input Manager (Old)"), EditorGUIUtility.TrTextContent("Input System Package (New)"), EditorGUIUtility.TrTextContent("Both") };
             public static readonly GUIContent lightmapEncodingLabel = EditorGUIUtility.TrTextContent("Lightmap Encoding", "Affects the encoding scheme and compression format of the lightmaps.");
             public static readonly GUIContent[] lightmapEncodingNames = { EditorGUIUtility.TrTextContent("Low Quality"), EditorGUIUtility.TrTextContent("Normal Quality"), EditorGUIUtility.TrTextContent("High Quality")};
-            public static readonly GUIContent lightmapStreamingEnabled = EditorGUIUtility.TrTextContent("Lightmap Streaming Enabled", "Only load larger lightmap mipmaps as needed to render the current game cameras. Requires texture streaming to be enabled in quality settings. This value is applied to the light map textures as they are generated.");
+            public static readonly GUIContent lightmapStreamingEnabled = EditorGUIUtility.TrTextContent("Lightmap Streaming", "Only load larger lightmap mipmaps as needed to render the current game cameras. Requires texture streaming to be enabled in quality settings. This value is applied to the light map textures as they are generated.");
             public static readonly GUIContent lightmapStreamingPriority = EditorGUIUtility.TrTextContent("Streaming Priority", "Lightmap mipmap streaming priority when there's contention for resources. Positive numbers represent higher priority. Valid range is -128 to 127. This value is applied to the light map textures as they are generated.");
             public static readonly GUIContent lightmapQualityAndroidWarning = EditorGUIUtility.TrTextContent("The selected Lightmap Encoding requires OpenGL ES 3.0 or Vulkan. Uncheck 'Automatic Graphics API' and remove OpenGL ES 2 API");
             public static readonly GUIContent lightmapQualityIOSWarning = EditorGUIUtility.TrTextContent("The selected Lightmap Encoding requires Metal API only. Uncheck 'Automatic Graphics API' and remove OpenGL ES APIs.");
             public static readonly GUIContent legacyClampBlendShapeWeights = EditorGUIUtility.TrTextContent("Clamp BlendShapes (Deprecated)*", "If set, the range of BlendShape weights in SkinnedMeshRenderers will be clamped.");
-            public static readonly GUIContent virtualTexturingSupportEnabled = EditorGUIUtility.TrTextContent("Support for virtual texturing", "If enabled virtual texturing may be used in this project.");
+            public static readonly GUIContent virtualTexturingSupportEnabled = EditorGUIUtility.TrTextContent("Enable Virtual Texturing*", "Enable support for Virtual Texturing. Changing this value requires an Editor restart.");
+            public static readonly GUIContent virtualTexturingUnsupportedPlatformWarning = EditorGUIUtility.TrTextContent("The current target platform does not support Virtual Texturing. To build for this platform, uncheck Enable Virtual Texturing.");
+            public static readonly GUIContent virtualTexturingUnsupportedAPI = EditorGUIUtility.TrTextContent("The target graphics API does not support Virtual Texturing. To target compatible graphics APIs, uncheck 'Auto Graphics API', and remove OpenGL ES 2/3 and OpenGLCore.");
+            public static readonly GUIContent virtualTexturingUnsupportedAPIWin = EditorGUIUtility.TrTextContent("The target Windows graphics API does not support Virtual Texturing. To target compatible graphics APIs, uncheck 'Auto Graphics API for Windows', and remove OpenGL ES 2/3 and OpenGLCore.");
+            public static readonly GUIContent virtualTexturingUnsupportedAPIMac = EditorGUIUtility.TrTextContent("The target Mac graphics API does not support Virtual Texturing. To target compatible graphics APIs, uncheck 'Auto Graphics API for Mac', and remove OpenGLCore.");
+            public static readonly GUIContent virtualTexturingUnsupportedAPILinux = EditorGUIUtility.TrTextContent("The target Linux graphics API does not support Virtual Texturing. To target compatible graphics APIs, uncheck 'Auto Graphics API for Linux', and remove OpenGLCore.");
 
             public static string undoChangedBundleIdentifierString { get { return LocalizationDatabase.GetLocalizedString("Changed macOS bundleIdentifier"); } }
             public static string undoChangedBuildNumberString { get { return LocalizationDatabase.GetLocalizedString("Changed macOS build number"); } }
@@ -224,6 +238,7 @@ namespace UnityEditor
         SavedInt m_SelectedSection = new SavedInt("PlayerSettings.ShownSection", -1);
 
         BuildPlatform[] validPlatforms;
+        BuildTargetGroup lastTargetGroup;
 
         // il2cpp
         SerializedProperty m_StripEngineCode;
@@ -302,6 +317,7 @@ namespace UnityEditor
 
         SerializedProperty m_ActiveColorSpace;
         SerializedProperty m_StripUnusedMeshComponents;
+        SerializedProperty m_MipStripping;
         SerializedProperty m_VertexChannelCompressionMask;
         SerializedProperty m_MetalEditorSupport;
         SerializedProperty m_MetalAPIValidation;
@@ -343,8 +359,13 @@ namespace UnityEditor
 
         // Legacy
         SerializedProperty m_LegacyClampBlendShapeWeights;
+        SerializedProperty m_AndroidEnableTango;
 
         SerializedProperty m_VirtualTexturingSupportEnabled;
+
+        // Scripting
+        SerializedProperty m_UseDeterministicCompilation;
+        SerializedProperty m_UseReferenceAssemblies;
 
         // Localization Cache
         string m_LocalizedTargetName;
@@ -359,6 +380,7 @@ namespace UnityEditor
             s_GraphicsDeviceLists[target].list = PlayerSettings.GetGraphicsAPIs(target).ToList();
         }
 
+        static ReorderableList s_ScriptingDefineSymbolsList;
         static ReorderableList s_ColorGamutList;
 
         public static void SyncColorGamuts()
@@ -366,14 +388,16 @@ namespace UnityEditor
             s_ColorGamutList.list = PlayerSettings.GetColorGamuts().ToList();
         }
 
-        public VR.PlayerSettingsEditorVR m_VRSettings;
-
         int selectedPlatform = 0;
         int scriptingDefinesControlID = 0;
+        string[] appliedScriptingDefines;
+        List<string>  scriptDefinesList;
+        bool hasScriptDefinesBeenModified;
+
         ISettingEditorExtension[] m_SettingsExtensions;
 
         // Section animation state
-        const int kNumberGUISections = 7;
+        const int kNumberGUISections = 6;
         AnimBool[] m_SectionAnimators = new AnimBool[kNumberGUISections];
         readonly AnimBool m_ShowDefaultIsNativeResolution = new AnimBool();
         readonly AnimBool m_ShowResolution = new AnimBool();
@@ -410,6 +434,7 @@ namespace UnityEditor
             m_UIStatusBarStyle              = FindPropertyAssert("uIStatusBarStyle");
             m_ActiveColorSpace              = FindPropertyAssert("m_ActiveColorSpace");
             m_StripUnusedMeshComponents     = FindPropertyAssert("StripUnusedMeshComponents");
+            m_MipStripping                  = FindPropertyAssert("mipStripping");
             m_VertexChannelCompressionMask  = FindPropertyAssert("VertexChannelCompressionMask");
             m_MetalEditorSupport            = FindPropertyAssert("metalEditorSupport");
             m_MetalAPIValidation            = FindPropertyAssert("metalAPIValidation");
@@ -448,6 +473,8 @@ namespace UnityEditor
 
             m_AllowUnsafeCode               = FindPropertyAssert("allowUnsafeCode");
             m_GCIncremental                 = FindPropertyAssert("gcIncremental");
+            m_UseDeterministicCompilation = FindPropertyAssert("useDeterministicCompilation");
+            m_UseReferenceAssemblies = FindPropertyAssert("useReferenceAssemblies");
 
             m_DefaultScreenWidth            = FindPropertyAssert("defaultScreenWidth");
             m_DefaultScreenHeight           = FindPropertyAssert("defaultScreenHeight");
@@ -490,6 +517,7 @@ namespace UnityEditor
             m_RequireES32                   = FindPropertyAssert("openGLRequireES32");
 
             m_LegacyClampBlendShapeWeights = FindPropertyAssert("legacyClampBlendShapeWeights");
+            m_AndroidEnableTango           = FindPropertyAssert("AndroidEnableTango");
 
             m_VirtualTexturingSupportEnabled = FindPropertyAssert("virtualTexturingSupportEnabled");
 
@@ -506,13 +534,24 @@ namespace UnityEditor
                 m_SectionAnimators[i] = new AnimBool(m_SelectedSection.value == i);
             SetValueChangeListeners(Repaint);
 
-            m_VRSettings = new VR.PlayerSettingsEditorVR(this);
-
             splashScreenEditor.OnEnable();
 
             // we clear it just to be on the safe side:
             // we access this cache both from player settings editor and script side when changing api
             s_GraphicsDeviceLists.Clear();
+        }
+
+        void OnDisable()
+        {
+            if (hasScriptDefinesBeenModified)
+            {
+                if (EditorUtility.DisplayDialog("Scripting Define Symbols Have Been Modified", "Do you want to save changes?", "Apply", "Revert"))
+                {
+                    PlayerSettings.SetScriptingDefineSymbolsForGroup(lastTargetGroup, scriptDefinesList.ToArray());
+                }
+
+                hasScriptDefinesBeenModified = false;
+            }
         }
 
         public void SetValueChangeListeners(UnityAction action)
@@ -583,13 +622,17 @@ namespace UnityEditor
 
             int sectionIndex = 0;
 
+            // Fix for case 1218668
+            EditorGUI.indentLevel++;
+
             IconSectionGUI(targetGroup, m_SettingsExtensions[selectedPlatform], sectionIndex++);
             ResolutionSectionGUI(targetGroup, m_SettingsExtensions[selectedPlatform], sectionIndex++);
             m_SplashScreenEditor.SplashSectionGUI(platform, targetGroup, m_SettingsExtensions[selectedPlatform], sectionIndex++);
             DebugAndCrashReportingGUI(platform, targetGroup, m_SettingsExtensions[selectedPlatform], sectionIndex++);
             OtherSectionGUI(platform, targetGroup, m_SettingsExtensions[selectedPlatform], sectionIndex++);
             PublishSectionGUI(targetGroup, m_SettingsExtensions[selectedPlatform], sectionIndex++);
-            m_VRSettings.XRSectionGUI(targetGroup, sectionIndex++);
+
+            EditorGUI.indentLevel--;
 
             if (sectionIndex != kNumberGUISections)
                 Debug.LogError("Mismatched number of GUI sections.");
@@ -635,16 +678,6 @@ namespace UnityEditor
             Rect rect = EditorGUILayout.GetControlRect();
             rect = EditorGUI.PrefixLabel(rect, 0, SettingsContent.cursorHotspot);
             EditorGUI.PropertyField(rect, m_CursorHotspot, GUIContent.none);
-
-            Rect vtPropRect = EditorGUILayout.GetControlRect();
-            vtPropRect = EditorGUI.PrefixLabel(vtPropRect, 0, SettingsContent.virtualTexturingSupportEnabled);
-            EditorGUI.BeginChangeCheck();
-            EditorGUI.PropertyField(vtPropRect, m_VirtualTexturingSupportEnabled, GUIContent.none);
-            if (EditorGUI.EndChangeCheck())
-            {
-                Undo.RecordObject(this.target, "Change virtual texture setting");
-                PlayerSettings.SetVirtualTexturingSupportEnabled(m_VirtualTexturingSupportEnabled.boolValue);
-            }
         }
 
         public bool BeginSettingsBox(int nr, GUIContent header)
@@ -1075,16 +1108,57 @@ namespace UnityEditor
             // If we're changing the first API for relevant editor, this will cause editor to switch: ask for scene save & confirmation
             if (firstEntryChanged && WillEditorUseFirstGraphicsAPI(target))
             {
-                if (EditorUtility.DisplayDialog("Changing editor graphics device",
-                    "You've changed the active graphics API. This requires a restart of the Editor.",
-                    "Restart Editor", "Not now"))
+                // If we have dirty scenes we need to save or discard changes before we restart editor.
+                // Otherwise user will get a dialog later on where they can click cancel and put editor in a bad device state.
+                var dirtyScenes = new List<Scene>();
+                for (int i = 0; i < EditorSceneManager.sceneCount; ++i)
                 {
-                    doRestart = true;
+                    var scene = EditorSceneManager.GetSceneAt(i);
+                    if (scene.isDirty)
+                        dirtyScenes.Add(scene);
+                }
+                if (dirtyScenes.Count != 0)
+                {
+                    var result = EditorUtility.DisplayDialogComplex("Changing editor graphics API",
+                        "You've changed the active graphics API. This requires a restart of the Editor. Do you want to save the Scene when restarting?",
+                        "Save and Restart", "Cancel Changing API", "Discard Changes and Restart");
+                    if (result == 1)
+                    {
+                        doRestart = false; // Cancel was selected
+                    }
+                    else
+                    {
+                        doRestart = true;
+                        if (result == 0) // Save and Restart was selected
+                        {
+                            for (int i = 0; i < dirtyScenes.Count; ++i)
+                            {
+                                var saved = EditorSceneManager.SaveScene(dirtyScenes[i]);
+                                if (saved == false)
+                                {
+                                    doRestart = false;
+                                }
+                            }
+                        }
+                        else // Discard Changes and Restart was selected
+                        {
+                            for (int i = 0; i < dirtyScenes.Count; ++i)
+                                EditorSceneManager.ClearSceneDirtiness(dirtyScenes[i]);
+                        }
+                    }
                 }
                 else
-                    doRestart = false;
+                {
+                    doRestart = EditorUtility.DisplayDialog("Changing editor graphics API",
+                        "You've changed the active graphics API. This requires a restart of the Editor.",
+                        "Restart Editor", "Not now");
+                }
+                return new ChangeGraphicsApiAction(doRestart, doRestart);
             }
-            return new ChangeGraphicsApiAction(true, doRestart);
+            else
+            {
+                return new ChangeGraphicsApiAction(true, false);
+            }
         }
 
         private void ApplyChangeGraphicsApiAction(BuildTarget target, GraphicsDeviceType[] apis, ChangeGraphicsApiAction action)
@@ -1455,9 +1529,10 @@ namespace UnityEditor
                 OtherSectionVulkanSettingsGUI(targetGroup, settingsExtension);
                 OtherSectionIdentificationGUI(targetGroup, settingsExtension);
                 OtherSectionConfigurationGUI(platform, targetGroup, settingsExtension);
+                OtherSectionScriptCompilationGUI(targetGroup);
                 OtherSectionOptimizationGUI(platform, targetGroup);
                 OtherSectionLoggingGUI();
-                OtherSectionLegacyGUI();
+                OtherSectionLegacyGUI(targetGroup);
                 ShowSharedNote();
             }
             EndSettingsBox();
@@ -1634,7 +1709,7 @@ namespace UnityEditor
                 {
                     GraphicsDeviceType[] gfxAPIs = PlayerSettings.GetGraphicsAPIs(platform.defaultTarget);
 
-                    hdrDisplaySupported = gfxAPIs[0] == GraphicsDeviceType.Direct3D11 || gfxAPIs[0] == GraphicsDeviceType.Direct3D12 || gfxAPIs[0] == GraphicsDeviceType.Vulkan;
+                    hdrDisplaySupported = gfxAPIs[0] == GraphicsDeviceType.Direct3D11 || gfxAPIs[0] == GraphicsDeviceType.Direct3D12 || gfxAPIs[0] == GraphicsDeviceType.Vulkan || gfxAPIs[0] == GraphicsDeviceType.Metal;
                 }
             }
 
@@ -1800,7 +1875,7 @@ namespace UnityEditor
                 }
             }
 
-            if (targetGroup == BuildTargetGroup.Standalone || (settingsExtension != null && settingsExtension.SupportsFrameTimingStatistics()))
+            if (targetGroup == BuildTargetGroup.Standalone || targetGroup == BuildTargetGroup.WSA || (settingsExtension != null && settingsExtension.SupportsFrameTimingStatistics()))
             {
                 PlayerSettings.enableFrameTimingStats = EditorGUILayout.Toggle(SettingsContent.enableFrameTimingStats, PlayerSettings.enableFrameTimingStats);
             }
@@ -1843,7 +1918,125 @@ namespace UnityEditor
                     EditorApplication.RequestRepaintAllViews();
             }
 
+            // Virtual Texturing settings
+            using (new EditorGUI.DisabledScope(EditorApplication.isPlaying || EditorApplication.isCompiling))
+            {
+                Rect vtPropRect = EditorGUILayout.GetControlRect();
+                vtPropRect = EditorGUI.PrefixLabel(vtPropRect, 0, SettingsContent.virtualTexturingSupportEnabled);
+
+                EditorGUI.BeginChangeCheck();
+                bool selectedValue = m_VirtualTexturingSupportEnabled.boolValue;
+                EditorGUI.PropertyField(vtPropRect, m_VirtualTexturingSupportEnabled, GUIContent.none);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    bool doApply = false;
+                    var dirtyScenes = new List<Scene>(EditorSceneManager.sceneCount);
+                    for (int i = 0; i < EditorSceneManager.sceneCount; ++i)
+                    {
+                        var scene = EditorSceneManager.GetSceneAt(i);
+                        if (scene.isDirty)
+                            dirtyScenes.Add(scene);
+                    }
+                    if (dirtyScenes.Count != 0)
+                    {
+                        var result = EditorUtility.DisplayDialogComplex("Changing Virtual Texturing support",
+                            "Enabling or disabling Virtual Texturing requires a restart of the Editor.",
+                            "Save and Restart", "Cancel", "Discard Changes and Restart");
+                        if (result == 1)
+                        {
+                            doApply = false; // Cancel was selected
+                        }
+                        else
+                        {
+                            doApply = true;
+                            if (result == 0) // Save and Restart was selected
+                            {
+                                for (int i = 0; i < dirtyScenes.Count; ++i)
+                                {
+                                    bool saved = EditorSceneManager.SaveScene(dirtyScenes[i]);
+                                    if (saved == false)
+                                    {
+                                        doApply = false;
+                                    }
+                                }
+                            }
+                            else // Discard Changes and Restart was selected
+                            {
+                                for (int i = 0; i < dirtyScenes.Count; ++i)
+                                    EditorSceneManager.ClearSceneDirtiness(dirtyScenes[i]);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        doApply = EditorUtility.DisplayDialog("Changing Virtual Texturing support",
+                            "Enabling or disabling Virtual Texturing requires a restart of the Editor.",
+                            "Restart Editor", "Cancel");
+                    }
+                    if (doApply)
+                    {
+                        PlayerSettings.SetVirtualTexturingSupportEnabled(m_VirtualTexturingSupportEnabled.boolValue);
+                        EditorApplication.RequestCloseAndRelaunchWithCurrentArguments();
+                        GUIUtility.ExitGUI();
+                    }
+                    else
+                    {
+                        m_VirtualTexturingSupportEnabled.boolValue = selectedValue;
+                    }
+                }
+            }
+
+            if (PlayerSettings.GetVirtualTexturingSupportEnabled())
+            {
+                // Test Platform compatibility
+                bool platformSupportsVT = UnityEngine.Rendering.VirtualTexturingEditor.Building.IsPlatformSupportedForPlayer(platform.defaultTarget);
+                if (!platformSupportsVT)
+                {
+                    EditorGUILayout.HelpBox(SettingsContent.virtualTexturingUnsupportedPlatformWarning.text, MessageType.Warning);
+                }
+
+                // Test for all three 'Automatic Graphics API for X' checkboxes and report API/Platform-specific error
+                if (targetGroup == BuildTargetGroup.Standalone)
+                {
+                    if (VirtualTexturingInvalidGfxAPI(BuildTarget.StandaloneWindows, true) ||
+                        VirtualTexturingInvalidGfxAPI(BuildTarget.StandaloneWindows64, true))
+                    {
+                        EditorGUILayout.HelpBox(SettingsContent.virtualTexturingUnsupportedAPIWin.text, MessageType.Warning);
+                    }
+
+                    if (VirtualTexturingInvalidGfxAPI(BuildTarget.StandaloneLinux64, true))
+                    {
+                        EditorGUILayout.HelpBox(SettingsContent.virtualTexturingUnsupportedAPILinux.text, MessageType.Warning);
+                    }
+
+                    if (VirtualTexturingInvalidGfxAPI(BuildTarget.StandaloneOSX, true))
+                    {
+                        EditorGUILayout.HelpBox(SettingsContent.virtualTexturingUnsupportedAPIMac.text, MessageType.Warning);
+                    }
+                }
+                else
+                {
+                    if (platformSupportsVT && VirtualTexturingInvalidGfxAPI(platform.defaultTarget, false))
+                    {
+                        EditorGUILayout.HelpBox(SettingsContent.virtualTexturingUnsupportedAPI.text, MessageType.Warning);
+                    }
+                }
+            }
+
             EditorGUILayout.Space();
+        }
+
+        private bool VirtualTexturingInvalidGfxAPI(BuildTarget target, bool checkEditor)
+        {
+            GraphicsDeviceType[] gfxTypes = PlayerSettings.GetGraphicsAPIs(target);
+
+            bool supportedAPI = true;
+            foreach (GraphicsDeviceType api in gfxTypes)
+            {
+                supportedAPI &= UnityEngine.Rendering.VirtualTexturingEditor.Building.IsRenderAPISupported(api, target, checkEditor);
+            }
+
+            return !supportedAPI;
         }
 
         private void OtherSectionIdentificationGUI(BuildTargetGroup targetGroup, ISettingEditorExtension settingsExtension)
@@ -1883,6 +2076,10 @@ namespace UnityEditor
             PlayerSettings.vulkanEnableSetSRGBWrite = EditorGUILayout.Toggle(SettingsContent.vulkanEnableSetSRGBWrite, PlayerSettings.vulkanEnableSetSRGBWrite);
             EditorGUILayout.PropertyField(m_VulkanNumSwapchainBuffers, SettingsContent.vulkanNumSwapchainBuffers);
             PlayerSettings.vulkanNumSwapchainBuffers = (UInt32)m_VulkanNumSwapchainBuffers.intValue;
+            PlayerSettings.vulkanEnablePreTransform = EditorGUILayout.Toggle(SettingsContent.vulkanEnablePreTransform, PlayerSettings.vulkanEnablePreTransform);
+
+            if (settingsExtension != null && settingsExtension.ShouldShowVulkanSettings())
+                settingsExtension.VulkanSectionGUI();
 
             EditorGUILayout.Space();
         }
@@ -2056,8 +2253,7 @@ namespace UnityEditor
                         if (ShouldRestartEditorToApplySetting())
                         {
                             m_EnableInputSystem.serializedObject.ApplyModifiedProperties();
-                            if (EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
-                                EditorApplication.OpenProject(Environment.CurrentDirectory);
+                            EditorApplication.OpenProject(Environment.CurrentDirectory);
                         }
                         else
                             m_GCIncremental.boolValue = oldValue;
@@ -2122,29 +2318,6 @@ namespace UnityEditor
             if (settingsExtension != null)
                 settingsExtension.ConfigurationSectionGUI();
 
-
-            // User script defines
-            {
-                EditorGUILayout.LabelField(SettingsContent.scriptingDefineSymbols);
-                EditorGUI.BeginChangeCheck();
-                string scriptDefines = EditorGUILayout.DelayedTextField(PlayerSettings.GetScriptingDefineSymbolsForGroup(targetGroup), EditorStyles.textField);
-                scriptingDefinesControlID = EditorGUIUtility.s_LastControlID;
-                if (EditorGUI.EndChangeCheck())
-                {
-                    Undo.RecordObject(this.target, SettingsContent.undoChangedScriptingDefineString);
-                    PlayerSettings.SetScriptingDefineSymbolsForGroup(targetGroup, scriptDefines);
-                }
-            }
-
-            {
-                EditorGUI.BeginChangeCheck();
-                EditorGUILayout.PropertyField(m_AllowUnsafeCode, SettingsContent.allowUnsafeCode);
-                if (EditorGUI.EndChangeCheck())
-                {
-                    PlayerSettings.allowUnsafeCode = m_AllowUnsafeCode.boolValue;
-                }
-            }
-
             // Active input handling
             int inputOption = (!m_EnableInputSystem.boolValue) ? 0 : m_DisableInputManager.boolValue ? 1 : 2;
             int oldInputOption = inputOption;
@@ -2160,14 +2333,132 @@ namespace UnityEditor
                         m_EnableInputSystem.boolValue = (inputOption == 1 || inputOption == 2);
                         m_DisableInputManager.boolValue = !(inputOption == 0 || inputOption == 2);
                         m_EnableInputSystem.serializedObject.ApplyModifiedProperties();
-                        if (EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
-                            EditorApplication.OpenProject(Environment.CurrentDirectory);
+                        EditorApplication.RestartEditorAndRecompileScripts();
                     }
                 }
                 EditorGUIUtility.ExitGUI();
             }
 
             EditorGUILayout.Space();
+        }
+
+        private void OtherSectionScriptCompilationGUI(BuildTargetGroup targetGroup)
+        {
+            // Configuration
+            GUILayout.Label(SettingsContent.scriptCompilationTitle, EditorStyles.boldLabel);
+
+            // User script defines
+            {
+                EditorGUI.BeginChangeCheck();
+
+                lastTargetGroup = targetGroup;
+
+                if (appliedScriptingDefines == null || s_ScriptingDefineSymbolsList == null)
+                {
+                    InitReorderableScriptingDefineSymbolsList(targetGroup);
+                }
+
+                s_ScriptingDefineSymbolsList.DoLayoutList();
+
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.FlexibleSpace();
+
+                var GUIState = GUI.enabled;
+
+                if (GUILayout.Button(SettingsContent.scriptingDefineSymbolsCopyDefines, EditorStyles.miniButton))
+                {
+                    EditorGUIUtility.systemCopyBuffer = PlayerSettings.GetScriptingDefineSymbolsForGroup(targetGroup);
+                }
+
+                GUI.enabled = hasScriptDefinesBeenModified;
+
+                if (GUILayout.Button(SettingsContent.scriptingDefineSymbolsApplyRevert, EditorStyles.miniButton))
+                {
+                    UpdateScriptingDefineSymbolsLists();
+                }
+
+                if (GUILayout.Button(SettingsContent.scriptingDefineSymbolsApply, EditorStyles.miniButton))
+                {
+                    PlayerSettings.SetScriptingDefineSymbolsForGroup(targetGroup, scriptDefinesList.ToArray());
+
+                    // Get Scripting Define Symbols without duplicates
+                    PlayerSettings.GetScriptingDefineSymbolsForGroup(targetGroup, out appliedScriptingDefines);
+                    UpdateScriptingDefineSymbolsLists();
+                }
+
+                // Set previous GUIState
+                GUI.enabled = GUIState;
+                EditorGUILayout.EndHorizontal();
+
+                scriptingDefinesControlID = EditorGUIUtility.s_LastControlID;
+                if (EditorGUI.EndChangeCheck())
+                {
+                    Undo.RecordObject(this.target, SettingsContent.undoChangedScriptingDefineString);
+                }
+            }
+
+            {
+                EditorGUI.BeginChangeCheck();
+                EditorGUILayout.PropertyField(m_AllowUnsafeCode, SettingsContent.allowUnsafeCode);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    PlayerSettings.allowUnsafeCode = m_AllowUnsafeCode.boolValue;
+                }
+            }
+
+            {
+                EditorGUI.BeginChangeCheck();
+                EditorGUILayout.PropertyField(m_UseDeterministicCompilation, SettingsContent.useDeterministicCompilation);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    PlayerSettings.UseDeterministicCompilation = m_UseDeterministicCompilation.boolValue;
+                }
+            }
+
+            {
+                EditorGUI.BeginChangeCheck();
+                EditorGUILayout.PropertyField(m_UseReferenceAssemblies, SettingsContent.useReferenceAssembclies);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    PlayerSettings.useReferenceAssemblies = m_UseReferenceAssemblies.boolValue;
+                }
+            }
+        }
+
+        void DrawTextField(Rect rect, int index)
+        {
+            // Handle list selection before the TextField grabs input
+            Event evt = Event.current;
+            if (evt.type == EventType.MouseDown && rect.Contains(evt.mousePosition))
+            {
+                if (s_ScriptingDefineSymbolsList.index != index)
+                {
+                    s_ScriptingDefineSymbolsList.index = index;
+                    s_ScriptingDefineSymbolsList.onSelectCallback?.Invoke(s_ScriptingDefineSymbolsList);
+                }
+            }
+
+            string define = scriptDefinesList[index];
+            scriptDefinesList[index] = GUI.TextField(rect, scriptDefinesList[index]);
+            if (!scriptDefinesList[index].Equals(define))
+                SetScriptingDefinesListDirty();
+        }
+
+        void AddScriptingDefineCallback(ReorderableList list)
+        {
+            scriptDefinesList.Add("");
+            SetScriptingDefinesListDirty();
+        }
+
+        void RemoveScriptingDefineCallback(ReorderableList list)
+        {
+            scriptDefinesList.RemoveAt(list.index);
+            SetScriptingDefinesListDirty();
+        }
+
+        void SetScriptingDefinesListDirty(ReorderableList list = null)
+        {
+            hasScriptDefinesBeenModified = true;
         }
 
         private void OtherSectionOptimizationGUI(BuildPlatform platform, BuildTargetGroup targetGroup)
@@ -2224,6 +2515,13 @@ namespace UnityEditor
             m_VertexChannelCompressionMask.intValue = (int)vertexFlags;
 
             EditorGUILayout.PropertyField(m_StripUnusedMeshComponents, SettingsContent.stripUnusedMeshComponents);
+
+            EditorGUI.BeginChangeCheck();
+            EditorGUILayout.PropertyField(m_MipStripping, SettingsContent.mipStripping);
+            if (EditorGUI.EndChangeCheck())
+            {
+                PlayerSettings.mipStripping = m_MipStripping.boolValue;
+            }
 
             EditorGUILayout.Space();
         }
@@ -2315,11 +2613,19 @@ namespace UnityEditor
             EditorGUILayout.Space();
         }
 
-        private void OtherSectionLegacyGUI()
+        private void OtherSectionLegacyGUI(BuildTargetGroup targetGroup)
         {
             GUILayout.Label(SettingsContent.legacyTitle, EditorStyles.boldLabel);
 
             EditorGUILayout.PropertyField(m_LegacyClampBlendShapeWeights, SettingsContent.legacyClampBlendShapeWeights);
+
+            // ARCore - legacy way to enable
+            if (BuildTargetDiscovery.PlatformGroupHasVRFlag(targetGroup, BuildTargetDiscovery.VRAttributes.SupportTango))
+            {
+                EditorGUILayout.Space();
+                GUILayout.Label(SettingsContent.legacyXRTitle, EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(m_AndroidEnableTango, EditorGUIUtility.TrTextContent("ARCore Supported"));
+            }
 
             EditorGUILayout.Space();
         }
@@ -2571,6 +2877,29 @@ namespace UnityEditor
                 }
             };
             return provider;
+        }
+
+        void InitReorderableScriptingDefineSymbolsList(BuildTargetGroup targetGroup)
+        {
+            // Get Scripting Define Symbols data
+            PlayerSettings.GetScriptingDefineSymbolsForGroup(targetGroup, out appliedScriptingDefines);
+            scriptDefinesList = appliedScriptingDefines.ToList();
+
+            // Initialize Reorderable List
+            s_ScriptingDefineSymbolsList = new ReorderableList(scriptDefinesList, typeof(string), true, true, true, true);
+            s_ScriptingDefineSymbolsList.drawElementCallback = (rect, index, isActive, isFocused) => DrawTextField(rect, index);
+            s_ScriptingDefineSymbolsList.drawHeaderCallback = (rect) => GUI.Label(rect, SettingsContent.scriptingDefineSymbols, EditorStyles.label);
+            s_ScriptingDefineSymbolsList.onAddCallback = AddScriptingDefineCallback;
+            s_ScriptingDefineSymbolsList.onRemoveCallback = RemoveScriptingDefineCallback;
+            s_ScriptingDefineSymbolsList.onChangedCallback += SetScriptingDefinesListDirty;
+        }
+
+        void UpdateScriptingDefineSymbolsLists()
+        {
+            scriptDefinesList = appliedScriptingDefines.ToList();
+            s_ScriptingDefineSymbolsList.list = scriptDefinesList;
+            s_ScriptingDefineSymbolsList.DoLayoutList();
+            hasScriptDefinesBeenModified = false;
         }
     }
 }

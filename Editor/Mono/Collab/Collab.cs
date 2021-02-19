@@ -21,6 +21,7 @@ namespace UnityEditor.Collaboration
     internal delegate bool ShowToolbarAtPositionDelegate(Rect screenRect);
     internal delegate bool IsToolbarVisibleDelegate();
     internal delegate void ShowHistoryWindowDelegate();
+    internal delegate void ShowChangesWindowDelegate();
     internal delegate void CloseToolbarDelegate();
     internal delegate void ChangesChangedDelegate(Change[] changes, bool isFiltered);
     internal delegate void ChangeItemsChangedDelegate(ChangeItem[] changes, bool isFiltered);
@@ -62,8 +63,9 @@ namespace UnityEditor.Collaboration
         public static IsToolbarVisibleDelegate IsToolbarVisible = null;
         public static CloseToolbarDelegate CloseToolbar = null;
 
-        // History delegates
+        // Preferences link delegates
         public static ShowHistoryWindowDelegate ShowHistoryWindow = null;
+        public static ShowChangesWindowDelegate ShowChangesWindow = null;
 
         private static Collab s_Instance;
         private static bool s_IsFirstStateChange = true;
@@ -268,6 +270,18 @@ namespace UnityEditor.Collaboration
             }
         }
 
+        public void RefreshAvailableLocalChangesSynchronous()
+        {
+            IVersionControl_V2 vc_v2 = s_VersionControlInstance as IVersionControl_V2;
+
+            // If our VersionControlInstance isn't v2, this whole method is a no-op
+            if (vc_v2 != null)
+            {
+                vc_v2.RefreshAvailableLocalChangesSynchronous();
+                UpdateChangesToPublish();
+            }
+        }
+
         // Static constructor for Collab
         static Collab()
         {
@@ -275,7 +289,6 @@ namespace UnityEditor.Collaboration
             s_Instance.projectBrowserSingleSelectionPath = string.Empty;
             s_Instance.projectBrowserSingleMetaSelectionPath = string.Empty;
             s_Instance.m_nativeCollab = GetNativeCollab();
-            JSProxyMgr.GetInstance().AddGlobalObject("unity/collab", s_Instance);
             ObjectListArea.postAssetIconDrawCallback += CollabProjectHook.OnProjectWindowIconOverlay;
             AssetsTreeViewGUI.postAssetIconDrawCallback += CollabProjectHook.OnProjectBrowserNavPanelIconOverlay;
             InitializeSoftlocksViewController();
@@ -400,21 +413,11 @@ namespace UnityEditor.Collaboration
         public PublishInfo_V2 GetChangesToPublish_V2()
         {
             ChangeItem[] changes = GetChangeItemsToPublishInternal_V2();
-            bool isFiltered = false;
-
-            if (SupportsAsyncChanges())
-            {
-                changes = GetSelectedChangeItemsInternal_V2();
-                if (Toolbar.isLastShowRequestPartial)
-                {
-                    isFiltered = true;
-                }
-            }
 
             return new PublishInfo_V2()
             {
                 changes = changes,
-                filter = isFiltered
+                filter = false
             };
         }
 

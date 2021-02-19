@@ -2,18 +2,19 @@
 // Copyright (c) Unity Technologies. For terms of use, see
 // https://unity3d.com/legal/licenses/Unity_Reference_Only_License
 
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEditorInternal;
 using UnityEngine.Networking;
-using Button = UnityEngine.UIElements.Button;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEditor.PackageManager.Requests;
 using UnityEditor.PackageManager;
 using UnityEditor.PackageManager.UI;
+
+using Button = UnityEngine.UIElements.Button;
+using Debug = UnityEngine.Debug;
 
 namespace UnityEditor.Connect
 {
@@ -189,11 +190,12 @@ namespace UnityEditor.Connect
                 UnityConnect.instance.ProjectRefreshed += OnRefreshRequired;
 
                 ReinitializeSettings();
+
                 UnityConnect.instance.RefreshProject();
 
                 if (settingsWindow.GetCurrentProvider() != this)
                 {
-                    EditorAnalytics.SendEventShowService(new ServicesProjectSettings.ShowServiceState() {
+                    EditorAnalytics.SendEventShowService(new ShowServiceState() {
                         service = GetServiceInstanceName(),
                         page = "",
                         referrer = "show_service_method"
@@ -220,8 +222,8 @@ namespace UnityEditor.Connect
         {
             // All struct fields are private, we check the public interface...
             // Doing something like: return (m_CachedProjectInfo != UnityConnect.instance.projectInfo); DOES NOT work.
+            // Also, we do not consider "projectInfo.valid" as a property to identify if the info changed.
             return
-                (m_CachedProjectInfo.valid != UnityConnect.instance.projectInfo.valid) ||
                 (m_CachedProjectInfo.buildAllowed != UnityConnect.instance.projectInfo.buildAllowed) ||
                 (m_CachedProjectInfo.coppaLock != UnityConnect.instance.projectInfo.coppaLock) ||
                 (m_CachedProjectInfo.moveLock != UnityConnect.instance.projectInfo.moveLock) ||
@@ -368,22 +370,24 @@ namespace UnityEditor.Connect
             RefreshCurrentUserRole();
         }
 
-        protected void OpenDashboardForOrganizationForeignKey(string dashboardUrl)
+        protected void OpenDashboardForOrgKeyAndProjectGuid(string dashboardUrl)
         {
-            string orgForeignKey = UnityConnect.instance.GetOrganizationForeignKey();
+            var orgForeignKey = UnityConnect.instance.GetOrganizationForeignKey();
+            var projectGuid = UnityConnect.instance.projectInfo.projectGUID;
 
             EditorAnalytics.SendOpenDashboardForService(new OpenDashboardForService()
             {
                 serviceName = GetServiceInstanceName(),
                 url = dashboardUrl,
-                organizationId = orgForeignKey
+                organizationId = orgForeignKey,
+                projectId = projectGuid
             });
-            Application.OpenURL(String.Format(dashboardUrl, orgForeignKey));
+            Application.OpenURL(String.Format(dashboardUrl, orgForeignKey, projectGuid));
         }
 
         protected void OpenDashboardForProjectGuid(string dashboardUrl)
         {
-            string projectGuid = UnityConnect.instance.projectInfo.projectGUID;
+            var projectGuid = UnityConnect.instance.projectInfo.projectGUID;
             EditorAnalytics.SendOpenDashboardForService(new OpenDashboardForService()
             {
                 serviceName = GetServiceInstanceName(),
@@ -395,8 +399,8 @@ namespace UnityEditor.Connect
 
         protected void OpenDashboardOrgAndProjectIds(string dashboardUrl)
         {
-            string orgSubUrl = UnityConnect.instance.projectInfo.organizationId;
-            string projectSubUrl = UnityConnect.instance.projectInfo.projectId;
+            var orgSubUrl = UnityConnect.instance.projectInfo.organizationId;
+            var projectSubUrl = UnityConnect.instance.projectInfo.projectId;
             EditorAnalytics.SendOpenDashboardForService(new OpenDashboardForService()
             {
                 serviceName = GetServiceInstanceName(),
@@ -409,45 +413,49 @@ namespace UnityEditor.Connect
 
         void RefreshCurrentUserRole()
         {
-            var getProjectUsersRequest = new UnityWebRequest(ServicesConfiguration.instance.GetCurrentProjectUsersApiUrl(),
-                UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
-            getProjectUsersRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
-            var operation = getProjectUsersRequest.SendWebRequest();
-            operation.completed += op =>
+            ServicesConfiguration.instance.RequestCurrentProjectUsersApiUrl(currentProjectUsersApiUrl =>
             {
-                try
+                var getProjectUsersRequest = new UnityWebRequest(currentProjectUsersApiUrl,
+                    UnityWebRequest.kHttpVerbGET) { downloadHandler = new DownloadHandlerBuffer() };
+                getProjectUsersRequest.suppressErrorsToConsole = true;
+                getProjectUsersRequest.SetRequestHeader("AUTHORIZATION", $"Bearer {UnityConnect.instance.GetUserInfo().accessToken}");
+                var operation = getProjectUsersRequest.SendWebRequest();
+                operation.completed += op =>
                 {
-                    if ((getProjectUsersRequest.result != UnityWebRequest.Result.ProtocolError) && !string.IsNullOrEmpty(getProjectUsersRequest.downloadHandler.text))
+                    try
                     {
-                        var jsonParser = new JSONParser(getProjectUsersRequest.downloadHandler.text);
-                        var json = jsonParser.Parse();
-                        try
+                        if (ServicesUtils.IsUnityWebRequestReadyForJsonExtract(getProjectUsersRequest))
                         {
-                            var currentUserId = UnityConnect.instance.userInfo.userId;
-                            var users = json.AsDict()[k_JsonUsersNodeName].AsList();
-                            foreach (var rawUser in users)
+                            var jsonParser = new JSONParser(getProjectUsersRequest.downloadHandler.text);
+                            var json = jsonParser.Parse();
+                            try
                             {
-                                var user = rawUser.AsDict();
-                                if (currentUserId.Equals(user[k_JsonUserIdNodeName].AsString()))
+                                var currentUserId = UnityConnect.instance.userInfo.userId;
+                                var users = json.AsDict()[k_JsonUsersNodeName].AsList();
+                                foreach (var rawUser in users)
                                 {
-                                    currentUserPermission = ConvertStringToUserRole(user[k_JsonRoleNodeName].AsString());
-                                    InternalToggleRestrictedVisualElementsAvailability(currentUserPermission == UserRole.User);
-                                    break;
+                                    var user = rawUser.AsDict();
+                                    if (currentUserId.Equals(user[k_JsonUserIdNodeName].AsString()))
+                                    {
+                                        currentUserPermission = ConvertStringToUserRole(user[k_JsonRoleNodeName].AsString());
+                                        InternalToggleRestrictedVisualElementsAvailability(currentUserPermission == UserRole.User);
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.LogException(ex);
+                            catch (Exception ex)
+                            {
+                                Debug.LogException(ex);
+                            }
                         }
                     }
-                }
-                finally
-                {
-                    getProjectUsersRequest.Dispose();
-                    getProjectUsersRequest = null;
-                }
-            };
+                    finally
+                    {
+                        getProjectUsersRequest.Dispose();
+                        getProjectUsersRequest = null;
+                    }
+                };
+            });
         }
 
         UserRole ConvertStringToUserRole(string s)
@@ -944,7 +952,7 @@ namespace UnityEditor.Connect
             const string k_ConnectingServicesContainerName = "ConnectingServicesContainer";
             const string k_RefreshButtonName = "RefreshBtn";
 
-            const string k_ConnectionRefreshedMessage = "Attempting connection refresh...";
+            const string k_ConnectionRefreshedMessage = "Attempting connection refresh.";
             const string k_ConnectionFailedMessage = "Failed to connect to Services. Services are not reachable right now.";
             const short k_MaxVerifyRetries = 50;
             const short k_VerifyDelay = 500;
@@ -986,6 +994,7 @@ namespace UnityEditor.Connect
                     refreshAccessButton.clicked += () =>
                     {
                         NotificationManager.instance.Publish(Notification.Topic.ProjectBind, Notification.Severity.Info, L10n.Tr(k_ConnectionRefreshedMessage));
+                        ServicesConfiguration.instance.LoadConfigurations(true);
                         stateMachine.ProcessEvent(Event.Initializing);
                     };
                 }
@@ -1008,6 +1017,13 @@ namespace UnityEditor.Connect
 
             void VerifyPaths()
             {
+                ServicesConfiguration.instance.UpdateProgress();
+                if (!ServicesConfiguration.instance.pathsReady && !ServicesConfiguration.instance.loadingConfigurations)
+                {
+                    //Get a path to force load
+                    ServicesConfiguration.instance.RequestBaseDashboardUrl(s => {});
+                }
+
                 if (ServicesConfiguration.instance.pathsReady)
                 {
                     ClearScheduledVerify();
@@ -1116,6 +1132,7 @@ namespace UnityEditor.Connect
             const string k_SameVersionInfo = "SameVersionInfo";
             const string k_ChoiceYes = "Yes";
             const string k_ChoiceNo = "No";
+            const string k_NotApplicable = "N/A";
 
             // UIElements For the related package messages
             Label m_CurrentPackageVersionLabel;
@@ -1126,7 +1143,7 @@ namespace UnityEditor.Connect
             ListRequest m_Request; // To get a list of all packages for the project
             SearchRequest m_SearchRequest; // To get the actual available package
             AddRequest m_AddRequest; // To start the actual update process
-            bool m_InstallingLatest; // A switch to make sure to only call the installation in a singleton fashion...
+            bool m_InstallingNewPackage; // A switch to make sure to only call the installation in a singleton fashion...
             bool m_NotLatestPackageInfoHasBeenShown;
 
             // Information to be set-up by the actual child classes
@@ -1139,22 +1156,29 @@ namespace UnityEditor.Connect
             protected bool packmanPackageInstalled { get; set; }
             protected bool isLatestPackageInstalled { get; set; }
 
+            protected string installPackageVersion { get; set; }
+
             // String containing the actual text for the version number label
-            string m_CurrentPackageVersion;
-            string m_LatestPackageVersion;
+            protected string currentPackageVersion { get; private set; }
+            protected string latestPackageVersion { get; private set; }
 
             protected void UpdatePackageInformation()
             {
-                m_CurrentPackageVersion = string.Empty;
-                m_LatestPackageVersion = string.Empty;
+                currentPackageVersion = string.Empty;
+                latestPackageVersion = string.Empty;
 
                 // List packages installed for the Project
                 m_Request = Client.List();
                 EditorApplication.update += ListingCurrentPackageProgress;
 
                 // Look for a specific package
-                m_SearchRequest = Client.Search(provider.serviceInstance.packageId);
+                m_SearchRequest = Client.Search(provider.serviceInstance.packageName);
                 EditorApplication.update += SearchPackageProgress;
+            }
+
+            protected virtual string GetUpdatablePackageVersion()
+            {
+                return latestPackageVersion;
             }
 
             protected void UpdatePackageUpdateButton()
@@ -1164,9 +1188,9 @@ namespace UnityEditor.Connect
                     return;
                 }
 
-                if ((m_CurrentPackageVersion != string.Empty) && (m_LatestPackageVersion != string.Empty))
+                if ((currentPackageVersion != string.Empty) && (GetUpdatablePackageVersion() != string.Empty))
                 {
-                    if (m_CurrentPackageVersion.Equals(m_LatestPackageVersion))
+                    if (currentPackageVersion.Equals(GetUpdatablePackageVersion()))
                     {
                         isLatestPackageInstalled = true;
                         m_InstallLatestVersion.style.display = DisplayStyle.None;
@@ -1200,9 +1224,9 @@ namespace UnityEditor.Connect
                     }
                     else
                     {
-                        EditorAnalytics.SendImportServicePackageEvent(new ImportPackageInfo() { packageName = provider.serviceInstance.packageId, version = m_LatestPackageVersion });
+                        EditorAnalytics.SendImportServicePackageEvent(new ImportPackageInfo() { packageName = provider.serviceInstance.packageName, version = installPackageVersion });
                     }
-                    m_InstallingLatest = false;
+                    m_InstallingNewPackage = false;
                 }
             }
 
@@ -1215,14 +1239,13 @@ namespace UnityEditor.Connect
                     {
                         foreach (var package in m_SearchRequest.Result)
                         {
-                            if (package.name.Contains(provider.serviceInstance.packageId))
+                            if (package.name.Equals(provider.serviceInstance.packageName))
                             {
-                                m_LatestPackageVersion = package.version;
+                                OnSearchPackageFound(package);
                                 if (m_LatestPackageVersionLabel != null)
                                 {
-                                    m_LatestPackageVersionLabel.text = package.version;
+                                    m_LatestPackageVersionLabel.text = GetUpdatablePackageVersion();
                                 }
-
                                 break;
                             }
                         }
@@ -1237,6 +1260,11 @@ namespace UnityEditor.Connect
                 }
             }
 
+            protected virtual void OnSearchPackageFound(PackageManager.PackageInfo package)
+            {
+                latestPackageVersion = package.version;
+            }
+
             protected void ListingCurrentPackageProgress()
             {
                 if (m_Request.IsCompleted)
@@ -1246,19 +1274,19 @@ namespace UnityEditor.Connect
                     if (m_Request.Status == StatusCode.Success)
                     {
                         // Make sure the actual version is N/A...
-                        m_CurrentPackageVersion = L10n.Tr("N/A").ToUpper();
+                        currentPackageVersion = L10n.Tr(k_NotApplicable).ToUpper();
                         foreach (var package in m_Request.Result)
                         {
-                            if (package.name.Contains(provider.serviceInstance.packageId))
+                            if (package.name.Equals(provider.serviceInstance.packageName))
                             {
                                 packmanPackageInstalled = true;
-                                m_CurrentPackageVersion = package.version;
+                                currentPackageVersion = package.version;
                                 break;
                             }
                         }
                         if (m_CurrentPackageVersionLabel != null)
                         {
-                            m_CurrentPackageVersionLabel.text = m_CurrentPackageVersion;
+                            m_CurrentPackageVersionLabel.text = currentPackageVersion;
                         }
                         // Call the update button update independently of the actual presence of the package
                         UpdatePackageUpdateButton();
@@ -1281,9 +1309,9 @@ namespace UnityEditor.Connect
                 {
                     gotoPackManWindow.clicked += () =>
                     {
-                        var packageId = provider.serviceInstance.packageId;
-                        EditorAnalytics.SendOpenPackManFromServiceSettings(new OpenPackageManager() { packageName = packageId });
-                        PackageManagerWindow.OpenPackageManager(packageId);
+                        var packageName = provider.serviceInstance.packageName;
+                        EditorAnalytics.SendOpenPackManFromServiceSettings(new OpenPackageManager() { packageName = packageName });
+                        PackageManagerWindow.OpenPackageManager(packageName);
                     };
                 }
                 m_CurrentPackageVersionLabel = sectionRoot.Q<Label>(k_CurrentVersionInfo);
@@ -1307,27 +1335,35 @@ namespace UnityEditor.Connect
                 m_InstallLatestVersion = sectionRoot.Q<Button>(k_InstallLatestVersion);
                 if (m_InstallLatestVersion != null)
                 {
-                    m_InstallingLatest = false;
-                    m_InstallLatestVersion.clicked += () =>
-                    {
-                        var messageForDialog = L10n.Tr(packageInstallationHeadsup);
-                        if ((duplicateInstallWarning != null) && assetStorePackageInstalled)
-                        {
-                            messageForDialog = L10n.Tr(duplicateInstallWarning);
-                        }
-
-                        if (!m_InstallingLatest)
-                        {
-                            if (EditorUtility.DisplayDialog(L10n.Tr(packageInstallationDialogTitle), messageForDialog,
-                                L10n.Tr(k_ChoiceYes), L10n.Tr(k_ChoiceNo)))
-                            {
-                                m_InstallingLatest = true;
-                                m_AddRequest = Client.Add(provider.serviceInstance.packageId);
-                                EditorApplication.update += AddPackageProgress;
-                            }
-                        }
-                    };
+                    m_InstallingNewPackage = false;
+                    m_InstallLatestVersion.clicked += InstallUpdatePackage;
                     m_InstallLatestVersion.style.display = DisplayStyle.None;
+                }
+            }
+
+            void InstallUpdatePackage()
+            {
+                var messageForDialog = L10n.Tr(packageInstallationHeadsup);
+                installPackageVersion = GetUpdatablePackageVersion();
+                if ((duplicateInstallWarning != null) && assetStorePackageInstalled)
+                {
+                    messageForDialog = L10n.Tr(duplicateInstallWarning);
+                }
+
+                InstallPackage(messageForDialog);
+            }
+
+            protected void InstallPackage(string messageForDialog)
+            {
+                if (!m_InstallingNewPackage)
+                {
+                    if (EditorUtility.DisplayDialog(L10n.Tr(packageInstallationDialogTitle), messageForDialog,
+                        L10n.Tr(k_ChoiceYes), L10n.Tr(k_ChoiceNo)))
+                    {
+                        m_InstallingNewPackage = true;
+                        m_AddRequest = Client.Add(provider.serviceInstance.packageName + "@" + installPackageVersion);
+                        EditorApplication.update += AddPackageProgress;
+                    }
                 }
             }
 

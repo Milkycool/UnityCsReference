@@ -17,7 +17,12 @@ namespace UnityEditor.U2D
         extern public static void PackAllAtlases(BuildTarget target, bool canCancel = true);
 
         [FreeFunction("PackSpriteAtlases")]
-        extern public static void PackAtlases(SpriteAtlas[] atlases, BuildTarget target, bool canCancel = true);
+        extern internal static void PackAtlasesInternal(SpriteAtlas[] atlases, BuildTarget target, bool canCancel = true, bool invokedFromImporter = false, bool unloadSprites = false);
+
+        public static void PackAtlases(SpriteAtlas[] atlases, BuildTarget target, bool canCancel = true)
+        {
+            PackAtlasesInternal(atlases, target, canCancel, false, true);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -95,5 +100,11 @@ namespace UnityEditor.U2D
         extern internal static Texture2D[] GetPreviewAlphaTextures(this SpriteAtlas spriteAtlas);
         extern internal static TextureFormat GetTextureFormat(this SpriteAtlas spriteAtlas, BuildTarget target);
         extern internal static Sprite[] GetPackedSprites(this SpriteAtlas spriteAtlas);
+        extern internal static Hash128 GetStoredHash(this SpriteAtlas spriteAtlas);
+        extern internal static TextureImporterPlatformSettings GetSecondaryPlatformSettings(this SpriteAtlas spriteAtlas, string buildTarget, string secondaryTextureName);
+        extern internal static void SetSecondaryPlatformSettings(this SpriteAtlas spriteAtlas, TextureImporterPlatformSettings src, string secondaryTextureName);
+        extern internal static bool GetSecondaryColorSpace(this SpriteAtlas spriteAtlas, string secondaryTextureName);
+        extern internal static void SetSecondaryColorSpace(this SpriteAtlas spriteAtlas, string secondaryTextureName, bool srGB);
+        extern internal static void DeleteSecondaryPlatformSettings(this SpriteAtlas spriteAtlas, string secondaryTextureName);
     }
 }

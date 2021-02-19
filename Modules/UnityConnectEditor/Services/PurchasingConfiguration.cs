@@ -12,6 +12,7 @@ namespace UnityEditor.Connect
         static readonly PurchasingConfiguration k_Instance;
 
         readonly string m_PurchasingPackageUrl;
+        readonly string m_AnalyticsApiUrl;
         readonly string m_GooglePlayDevConsoleUrl;
 
         static PurchasingConfiguration()
@@ -22,7 +23,8 @@ namespace UnityEditor.Connect
         PurchasingConfiguration()
         {
             m_PurchasingPackageUrl = "https://public-cdn.cloud.unity3d.com/UnityEngine.Cloud.Purchasing.unitypackage";
-            m_GooglePlayDevConsoleUrl = "https://analytics.cloud.unity3d.com";
+            m_AnalyticsApiUrl = "https://analytics.cloud.unity3d.com";
+            m_GooglePlayDevConsoleUrl = "https://play.google.com/apps/publish/";
         }
 
         public static PurchasingConfiguration instance => k_Instance;
@@ -30,6 +32,11 @@ namespace UnityEditor.Connect
         public string purchasingPackageUrl
         {
             get { return m_PurchasingPackageUrl; }
+        }
+
+        public string analyticsApiUrl
+        {
+            get { return m_AnalyticsApiUrl; }
         }
 
         public string googlePlayDevConsoleUrl

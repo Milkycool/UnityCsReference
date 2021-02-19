@@ -15,9 +15,12 @@ namespace UnityEditor.Connect
         public override string description { get; }
         public override string pathTowardIcon { get; }
         public override string projectSettingsPath { get; }
+        public override string settingsProviderClassName => nameof(CollabProjectSettings);
         public override bool displayToggle { get; }
         public override Notification.Topic notificationTopic => Notification.Topic.CollabService;
-        public override string packageId { get; }
+        public override string packageName { get; }
+        public override string serviceFlagName { get; }
+        public override bool shouldSyncOnProjectRebind => true;
 
         static readonly CollabService k_Instance;
 
@@ -33,14 +36,14 @@ namespace UnityEditor.Connect
             k_Instance = new CollabService();
         }
 
-        protected override void InternalEnableService(bool enable)
+        protected override void InternalEnableService(bool enable, bool shouldUpdateApiFlag)
         {
             if (IsServiceEnabled() != enable)
             {
                 EditorAnalytics.SendEventServiceInfo(new CollabServiceState() { collaborate = enable });
             }
 
-            base.InternalEnableService(enable);
+            base.InternalEnableService(enable, shouldUpdateApiFlag);
 
             Collab.instance.SetCollabEnabledForCurrentProject(enable);
 
@@ -55,7 +58,8 @@ namespace UnityEditor.Connect
             pathTowardIcon = @"Builtin Skins\Shared\Images\ServicesWindow-ServiceIcon-Collab.png";
             projectSettingsPath = "Project/Services/Collaborate";
             displayToggle = true;
-            packageId = "com.unity.collab-proxy";
+            packageName = "com.unity.collab-proxy";
+            serviceFlagName = "collab";
             ServicesRepository.AddService(this);
         }
     }

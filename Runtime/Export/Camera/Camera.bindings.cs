@@ -27,6 +27,8 @@ namespace UnityEngine
     [RequireComponent(typeof(Transform))]
     public sealed partial class Camera : Behaviour
     {
+        public Camera() {}
+
         [NativeProperty("Near")] extern public float nearClipPlane { get; set; }
         [NativeProperty("Far")]  extern public float farClipPlane  { get; set; }
         [NativeProperty("VerticalFieldOfView")]  extern public float fieldOfView   { get; set; }
@@ -62,6 +64,9 @@ namespace UnityEngine
 
         [NativeConditional("UNITY_EDITOR")]
         extern public ulong  overrideSceneCullingMask     { get; set; }
+
+        [NativeConditional("UNITY_EDITOR")]
+        extern internal ulong sceneCullingMask { get; }
 
         [FreeFunction("CameraScripting::GetLayerCullDistances", HasExplicitThis = true)] extern private float[] GetLayerCullDistances();
         [FreeFunction("CameraScripting::SetLayerCullDistances", HasExplicitThis = true)] extern private void SetLayerCullDistances([NotNull] float[] d);

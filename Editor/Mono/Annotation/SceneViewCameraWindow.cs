@@ -3,7 +3,7 @@
 // https://unity3d.com/legal/licenses/Unity_Reference_Only_License
 
 using System;
-using System.Linq;
+using UnityEditor.ShortcutManagement;
 using UnityEngine;
 
 namespace UnityEditor
@@ -12,17 +12,17 @@ namespace UnityEditor
     {
         static class Styles
         {
-            static bool s_Initialized;
-            public static GUIStyle settingsArea;
+            public static readonly GUIContent copyPlacementLabel = EditorGUIUtility.TrTextContent("Copy Placement");
+            public static readonly GUIContent pastePlacementLabel = EditorGUIUtility.TrTextContent("Paste Placement");
+            public static readonly GUIContent copySettingsLabel = EditorGUIUtility.TrTextContent("Copy Settings");
+            public static readonly GUIContent pasteSettingsLabel = EditorGUIUtility.TrTextContent("Paste Settings");
+            public static readonly GUIContent resetSettingsLabel = EditorGUIUtility.TrTextContent("Reset Settings");
 
-            public static void Init()
+            public static readonly GUIStyle settingsArea;
+
+            static Styles()
             {
-                if (s_Initialized)
-                    return;
-
-                s_Initialized = true;
-
-                settingsArea = new GUIStyle()
+                settingsArea = new GUIStyle
                 {
                     border = new RectOffset(4, 4, 4, 4),
                 };
@@ -38,6 +38,8 @@ namespace UnityEditor
         GUIContent m_DynamicClip;
         GUIContent m_OcclusionCulling;
         GUIContent m_EasingEnabled;
+        GUIContent m_SceneCameraLabel = EditorGUIUtility.TrTextContent("Scene Camera");
+        GUIContent m_NavigationLabel = EditorGUIUtility.TrTextContent("Navigation");
 
         const int kFieldCount = 12;
         const int kWindowWidth = 290;
@@ -48,7 +50,7 @@ namespace UnityEditor
         const int k_HeaderSpacing = 2;
         // FOV values chosen to be the smallest and largest before extreme visual corruption
         const float k_MinFieldOfView = 4f;
-        const float k_MaxFieldOfView = 160f;
+        const float k_MaxFieldOfView = 120f;
 
         Vector2 m_WindowSize;
         Vector2 m_Scroll;
@@ -61,8 +63,6 @@ namespace UnityEditor
             return m_WindowSize;
         }
 
-        SceneViewCameraWindow() {}
-
         public SceneViewCameraWindow(SceneView sceneView)
         {
             m_SceneView = sceneView;
@@ -74,7 +74,7 @@ namespace UnityEditor
             m_OcclusionCulling = EditorGUIUtility.TrTextContent("Occlusion Culling", "Check this to enable occlusion culling in the Scene view. Occlusion culling disables rendering of objects when they\'re not currently seen by the camera because they\'re hidden (occluded) by other objects.");
             m_EasingEnabled = EditorGUIUtility.TrTextContent("Camera Easing", "Check this to enable camera movement easing. This makes the camera ease in when it starts moving and ease out when it stops.");
             m_WindowSize = new Vector2(kWindowWidth, kWindowHeight);
-            m_MinMaxContent = new GUIContent[]
+            m_MinMaxContent = new[]
             {
                 EditorGUIUtility.TrTextContent("Min", "The minimum speed of the camera in the Scene view. Valid values are between [0.001, 98]."),
                 EditorGUIUtility.TrTextContent("Max", "The maximum speed of the camera in the Scene view. Valid values are between [0.002, 99].")
@@ -98,8 +98,6 @@ namespace UnityEditor
 
         void Draw()
         {
-            Styles.Init();
-
             var settings = m_SceneView.cameraSettings;
 
             m_Scroll = GUILayout.BeginScrollView(m_Scroll);
@@ -110,10 +108,10 @@ namespace UnityEditor
             GUILayout.Space(k_HeaderSpacing);
 
             GUILayout.BeginHorizontal();
-            GUILayout.Label(EditorGUIUtility.TrTextContent("Scene Camera"), EditorStyles.boldLabel);
+            GUILayout.Label(m_SceneCameraLabel, EditorStyles.boldLabel);
             GUILayout.FlexibleSpace();
             if (GUILayout.Button(EditorGUI.GUIContents.titleSettingsIcon, EditorStyles.iconButton))
-                ShowContextMenu();
+                ShowContextMenu(m_SceneView);
             GUILayout.EndHorizontal();
 
             EditorGUIUtility.labelWidth = kPrefixLabelWidth;
@@ -140,7 +138,7 @@ namespace UnityEditor
 
             EditorGUILayout.Space(k_HeaderSpacing);
 
-            GUILayout.Label(EditorGUIUtility.TrTextContent("Navigation"), EditorStyles.boldLabel);
+            GUILayout.Label(m_NavigationLabel, EditorStyles.boldLabel);
 
             settings.easingEnabled = EditorGUILayout.Toggle(m_EasingEnabled, settings.easingEnabled);
             settings.accelerationEnabled = EditorGUILayout.Toggle(m_AccelerationEnabled, settings.accelerationEnabled);
@@ -208,17 +206,97 @@ namespace UnityEditor
             EditorGUIUtility.labelWidth = oldLabelWidth;
         }
 
-        void ShowContextMenu()
+        internal static void ShowContextMenu(SceneView view)
         {
             var menu = new GenericMenu();
-            menu.AddItem(EditorGUIUtility.TrTextContent("Reset"), false, Reset);
+            menu.AddItem(Styles.copyPlacementLabel, false, () => CopyPlacement(view));
+            if (CanPastePlacement())
+                menu.AddItem(Styles.pastePlacementLabel, false, () => PastePlacement(view));
+            else
+                menu.AddDisabledItem(Styles.pastePlacementLabel);
+            menu.AddItem(Styles.copySettingsLabel, false, () => CopySettings(view));
+            if (Clipboard.HasCustomValue<SceneView.CameraSettings>())
+                menu.AddItem(Styles.pasteSettingsLabel, false, () => PasteSettings(view));
+            else
+                menu.AddDisabledItem(Styles.pasteSettingsLabel);
+            menu.AddItem(Styles.resetSettingsLabel, false, () => ResetSettings(view));
+
             menu.ShowAsContext();
         }
 
-        void Reset()
+        // ReSharper disable once UnusedMember.Local - called by a shortcut
+        [Shortcut("Camera/Copy Placement")]
+        static void CopyPlacementShortcut()
         {
-            m_SceneView.ResetCameraSettings();
-            m_SceneView.Repaint();
+            // if we are interacting with a game view, copy the main camera placement
+            var playView = PlayModeView.GetLastFocusedPlayModeView();
+            if (playView != null && (EditorWindow.focusedWindow == playView || EditorWindow.mouseOverWindow == playView))
+            {
+                var cam = Camera.main;
+                if (cam != null)
+                    Clipboard.SetCustomValue(new TransformWorldPlacement(cam.transform));
+            }
+            // otherwise copy the last active scene view placement
+            else
+            {
+                var sceneView = SceneView.lastActiveSceneView;
+                if (sceneView != null)
+                    CopyPlacement(sceneView);
+            }
+        }
+
+        static void CopyPlacement(SceneView view)
+        {
+            Clipboard.SetCustomValue(new TransformWorldPlacement(view.camera.transform));
+        }
+
+        // ReSharper disable once UnusedMember.Local - called by a shortcut
+        [Shortcut("Camera/Paste Placement")]
+        static void PastePlacementShortcut()
+        {
+            var sceneView = SceneView.lastActiveSceneView;
+            if (sceneView == null) return;
+            if (CanPastePlacement())
+                PastePlacement(sceneView);
+        }
+
+        static bool CanPastePlacement()
+        {
+            return Clipboard.HasCustomValue<TransformWorldPlacement>();
+        }
+
+        static void PastePlacement(SceneView view)
+        {
+            var tr = view.camera.transform;
+            var placement = Clipboard.GetCustomValue<TransformWorldPlacement>();
+            tr.position = placement.position;
+            tr.rotation = placement.rotation;
+            tr.localScale = placement.scale;
+
+            // Similar to what AlignViewToObject does, except we need to do that instantly
+            // in case the shortcut key was pressed while FPS camera controls (right click drag)
+            // were active.
+            view.size = 10;
+            view.LookAt(tr.position + tr.forward * view.cameraDistance, tr.rotation, view.size, view.orthographic, true);
+
+            view.Repaint();
+        }
+
+        static void CopySettings(SceneView view)
+        {
+            Clipboard.SetCustomValue(view.cameraSettings);
+        }
+
+        static void PasteSettings(SceneView view)
+        {
+            view.cameraSettings = Clipboard.GetCustomValue<SceneView.CameraSettings>();
+            view.Repaint();
+        }
+
+        static void ResetSettings(SceneView view)
+        {
+            view.ResetCameraSettings();
+            view.Repaint();
         }
     }
 }

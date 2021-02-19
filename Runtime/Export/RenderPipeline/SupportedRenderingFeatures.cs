@@ -57,13 +57,31 @@ namespace UnityEngine.Rendering
         public bool receiveShadows { get; set; } = true;
         public bool reflectionProbes { get; set; } = true;
         public bool rendererPriority { get; set; } = false;
-
+        public bool terrainDetailUnsupported { get; set; } = false;
+        public bool rendersUIOverlay { get; set; }
         public bool overridesEnvironmentLighting { get; set; } = false;
         public bool overridesFog { get; set; } = false;
+        public bool overridesRealtimeReflectionProbes { get; set; } = false;
         public bool overridesOtherLightingSettings { get; set; } = false;
         public bool editableMaterialRenderQueue { get; set; } = true;
         public bool overridesLODBias { get; set; } = false;
         public bool overridesMaximumLODLevel { get; set; } = false;
+        public bool rendererProbes { get; set; } = true;
+        public bool particleSystemInstancing { get; set; } = true;
+
+        // if this is overridden, please provide a message telling the user where to find it, otherwise it will be an empty string (to prevent confusion)
+        public bool overridesShadowmask { get; set; } = false;
+        public string overrideShadowmaskMessage { get; set; } = "";
+
+        public string shadowmaskMessage
+        {
+            get
+            {
+                if (!overridesShadowmask)
+                    return "The Shadowmask Mode used at run time can be set in the Quality Settings panel.";
+                return overrideShadowmaskMessage;
+            }
+        }
 
         internal static unsafe MixedLightingMode FallbackMixedLightingMode()
         {
@@ -207,6 +225,13 @@ namespace UnityEngine.Rendering
             // 0 = Enlighten
             // if the lightmapper is Enlighten but Enlighten is deprecated, it's not supported
             *isSupported = ((lightmapper == 0) && !active.enlighten) ? false : true;
+        }
+
+        [RequiredByNativeCode]
+        internal static unsafe void IsUIOverlayRenderedBySRP(IntPtr isSupportedPtr)
+        {
+            var isSupported = (bool*)isSupportedPtr;
+            *isSupported = active.rendersUIOverlay;
         }
 
         internal static unsafe int FallbackLightmapper()

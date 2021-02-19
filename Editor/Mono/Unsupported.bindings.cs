@@ -118,7 +118,15 @@ namespace UnityEditor
         public static extern void CopyGameObjectsToPasteboard();
 
         [FreeFunction]
-        public static extern void PasteGameObjectsFromPasteboard();
+        internal static extern bool CanPasteGameObjectsFromPasteboard();
+
+        public static void PasteGameObjectsFromPasteboard()
+        {
+            PasteGameObjectsFromPasteboard(null);
+        }
+
+        [FreeFunction]
+        internal static extern void PasteGameObjectsFromPasteboard(Transform parent);
 
         [FreeFunction("AssetDatabase::GetSingletonAsset")]
         public static extern UnityEngine.Object GetSerializedAssetInterfaceSingleton(string className);
@@ -244,5 +252,13 @@ namespace UnityEditor
 
         [StaticAccessor("GetRenderManager()", StaticAccessorType.Dot)]
         public static extern bool useScriptableRenderPipeline { get; set; }
+
+        [NativeMethod("ClearPasteboard")]
+        internal static extern void ClearPasteboard();
+
+        public static UnityEngine.Object GetRenderSettings()
+        {
+            return RenderSettings.GetRenderSettings();
+        }
     }
 }

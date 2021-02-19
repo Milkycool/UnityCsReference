@@ -32,7 +32,7 @@ namespace UnityEditor.Connect
         const string k_GoToWebDashboardLink = "GoToWebDashboard";
         const string k_GoToDashboardLinkName = "GoToDashboard";
         const string k_OpenHistoryLink = "OpenHistory";
-        const string k_OpenToolbarLink = "OpenToolbar";
+        const string k_OpenChangesLink = "OpenChanges";
 
         const string k_CollabPublishSection = "CollabPublishSection";
         const string k_CollabHistorySection = "CollabHistorySection";
@@ -89,13 +89,8 @@ namespace UnityEditor.Connect
         void SetupServiceToggle(SingleService singleService)
         {
             m_MainServiceToggle.SetProperty(k_ServiceNameProperty, singleService.name);
-            m_MainServiceToggle.SetValueWithoutNotify(singleService.IsServiceEnabled());
-            SetupServiceToggleLabel(m_MainServiceToggle, singleService.IsServiceEnabled());
             m_MainServiceToggle.SetEnabled(false);
-            if (m_GoToDashboard != null)
-            {
-                m_GoToDashboard.style.display = (singleService.IsServiceEnabled()) ? DisplayStyle.Flex : DisplayStyle.None;
-            }
+            UpdateServiceToggleAndDashboardLink(singleService.IsServiceEnabled());
 
             if (singleService.displayToggle)
             {
@@ -103,21 +98,29 @@ namespace UnityEditor.Connect
                 {
                     if (currentUserPermission != UserRole.Owner && currentUserPermission != UserRole.Manager)
                     {
-                        m_MainServiceToggle.SetValueWithoutNotify(evt.previousValue);
-                        m_MainServiceToggle.SetValueWithoutNotify(evt.previousValue);
+                        UpdateServiceToggleAndDashboardLink(evt.previousValue);
                         return;
                     }
-                    SetupServiceToggleLabel(m_MainServiceToggle, evt.newValue);
                     singleService.EnableService(evt.newValue);
-                    if (m_GoToDashboard != null)
-                    {
-                        m_GoToDashboard.style.display = (evt.newValue) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
                 });
             }
             else
             {
                 m_MainServiceToggle.style.display = DisplayStyle.None;
+            }
+        }
+
+        void UpdateServiceToggleAndDashboardLink(bool isEnabled)
+        {
+            if (m_GoToDashboard != null)
+            {
+                m_GoToDashboard.style.display = (isEnabled) ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            if (m_MainServiceToggle != null)
+            {
+                m_MainServiceToggle.SetValueWithoutNotify(isEnabled);
+                SetupServiceToggleLabel(m_MainServiceToggle, isEnabled);
             }
         }
 
@@ -141,6 +144,15 @@ namespace UnityEditor.Connect
                         Notification.Severity.Warning,
                         k_CollabPermissionMessage);
                 }
+            }
+        }
+
+        void OnCollabStateChanged(CollabInfo info)
+        {
+            // Make sure to update the service state based on the information changed in Collab...
+            if (CollabService.instance.IsServiceEnabled() != Collab.instance.IsCollabEnabledForCurrentProject())
+            {
+                CollabService.instance.EnableService(Collab.instance.IsCollabEnabledForCurrentProject());
             }
         }
 
@@ -171,7 +183,7 @@ namespace UnityEditor.Connect
             {
                 var clickable = new Clickable(() =>
                 {
-                    OpenDashboardOrgAndProjectIds(ServicesConfiguration.instance.baseCollabDashboardUrl);
+                    ServicesConfiguration.instance.RequestBaseCollabDashboardUrl(OpenDashboardOrgAndProjectIds);
                 });
                 m_GoToDashboard.AddManipulator(clickable);
             }
@@ -199,6 +211,11 @@ namespace UnityEditor.Connect
         {
             if (!m_EventHandlerInitialized)
             {
+                // Make sure to follow-up the Collab State...
+                // Collab is a specific case where the service can be enabled inside another Editor Window by the Collab package code itself.
+                //     We need to be informed of that changed when it happens
+                Collab.instance.StateChanged += OnCollabStateChanged;
+
                 CollabService.instance.serviceAfterEnableEvent += ServiceIsEnablingEvent;
                 CollabService.instance.serviceAfterDisableEvent += ServiceIsDisablingEvent;
                 m_EventHandlerInitialized = true;
@@ -209,6 +226,7 @@ namespace UnityEditor.Connect
         {
             if (m_EventHandlerInitialized)
             {
+                Collab.instance.StateChanged -= OnCollabStateChanged;
                 CollabService.instance.serviceAfterEnableEvent -= ServiceIsEnablingEvent;
                 CollabService.instance.serviceAfterDisableEvent -= ServiceIsDisablingEvent;
                 m_EventHandlerInitialized = false;
@@ -252,6 +270,8 @@ namespace UnityEditor.Connect
                     var newVisual = generalTemplate.CloneTree().contentContainer;
                     ServicesUtils.TranslateStringsInTree(newVisual);
                     scrollContainer.Add(newVisual);
+
+                    provider.UpdateServiceToggleAndDashboardLink(provider.serviceInstance.IsServiceEnabled());
                 }
 
                 provider.HandlePermissionRestrictedControls();
@@ -344,15 +364,14 @@ namespace UnityEditor.Connect
                     };
                 }
 
-                Button openToolbarLinkBtn = provider.rootVisualElement.Q(k_OpenToolbarLink) as Button;
-                if (openToolbarLinkBtn != null)
+                Button openChangesLinkBtn = provider.rootVisualElement.Q(k_OpenChangesLink) as Button;
+                if (openChangesLinkBtn != null)
                 {
-                    openToolbarLinkBtn.clicked += () =>
+                    openChangesLinkBtn.clicked += () =>
                     {
-                        Toolbar.requestShowCollabToolbar = true;
-                        if (Toolbar.get)
+                        if (Collab.ShowChangesWindow != null)
                         {
-                            Toolbar.get.Repaint();
+                            Collab.ShowChangesWindow();
                         }
                     };
                 }
@@ -362,10 +381,12 @@ namespace UnityEditor.Connect
                 {
                     var clickable = new Clickable(() =>
                     {
-                        provider.OpenDashboardOrgAndProjectIds(ServicesConfiguration.instance.baseCloudUsageDashboardUrl);
+                        ServicesConfiguration.instance.RequestBaseCloudUsageDashboardUrl(provider.OpenDashboardOrgAndProjectIds);
                     });
                     gotoWebDashboard.AddManipulator(clickable);
                 }
+                provider.UpdateServiceToggleAndDashboardLink(provider.serviceInstance.IsServiceEnabled());
+
                 // Prepare the package section and update the package information
                 PreparePackageSection(scrollContainer);
                 UpdatePackageInformation();

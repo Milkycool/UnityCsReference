@@ -59,7 +59,7 @@ namespace UnityEditor
         }
         static readonly int kErrorViewHash = "ShaderErrorView".GetHashCode();
 
-        private bool m_PreprocessOnly = false;
+        private static bool s_PreprocessOnly = false;
 
         Vector2 m_ScrollPosition = Vector2.zero;
         private Material m_SrpCompatibilityCheckMaterial = null;
@@ -79,7 +79,8 @@ namespace UnityEditor
         public virtual void OnEnable()
         {
             var s = target as Shader;
-            ShaderUtil.FetchCachedMessages(s);
+            if (s != null)
+                ShaderUtil.FetchCachedMessages(s);
         }
 
         public virtual void OnDisable()
@@ -322,20 +323,34 @@ namespace UnityEditor
             GUILayout.EndScrollView();
         }
 
+        ShaderMessage[] m_ShaderMessages;
         private void ShowShaderErrors(Shader s)
         {
-            int n = ShaderUtil.GetShaderMessageCount(s);
-            if (n < 1)
+            if (Event.current.type == EventType.Layout)
+            {
+                int n = ShaderUtil.GetShaderMessageCount(s);
+                m_ShaderMessages = null;
+                if (n >= 1)
+                {
+                    m_ShaderMessages = ShaderUtil.GetShaderMessages(s);
+                }
+            }
+
+            if (m_ShaderMessages == null)
                 return;
-            ShaderErrorListUI(s, ShaderUtil.GetShaderMessages(s), ref m_ScrollPosition);
+            ShaderErrorListUI(s, m_ShaderMessages, ref m_ScrollPosition);
         }
 
         // Compiled shader code button+dropdown
         private void ShowCompiledCodeButton(Shader s)
         {
             EditorGUILayout.BeginVertical();
-            using (new EditorGUI.DisabledScope(!EditorSettings.cachingShaderPreprocessor))
-                m_PreprocessOnly = EditorGUILayout.Toggle(Styles.togglePreprocess, m_PreprocessOnly);
+            ShaderImporter importer = AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(s.GetInstanceID())) as ShaderImporter;
+            bool enablePreprocessOnly = EditorSettings.cachingShaderPreprocessor;
+            if (importer && importer.preprocessorOverride == PreprocessorOverride.ForceCachingPreprocessor)
+                enablePreprocessOnly = true;
+            using (new EditorGUI.DisabledScope(!enablePreprocessOnly))
+                s_PreprocessOnly = EditorGUILayout.Toggle(Styles.togglePreprocess, s_PreprocessOnly);
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PrefixLabel("Compiled code", EditorStyles.miniButton);
 
@@ -354,7 +369,7 @@ namespace UnityEditor
                 }
                 if (GUI.Button(modeRect, modeContent, EditorStyles.miniButton))
                 {
-                    ShaderUtil.OpenCompiledShader(s, ShaderInspectorPlatformsPopup.currentMode, ShaderInspectorPlatformsPopup.currentPlatformMask, ShaderInspectorPlatformsPopup.currentVariantStripping == 0, m_PreprocessOnly);
+                    ShaderUtil.OpenCompiledShader(s, ShaderInspectorPlatformsPopup.currentMode, ShaderInspectorPlatformsPopup.currentPlatformMask, ShaderInspectorPlatformsPopup.currentVariantStripping == 0, enablePreprocessOnly && s_PreprocessOnly);
                     GUIUtility.ExitGUI();
                 }
             }
@@ -596,6 +611,7 @@ namespace UnityEditor
             }
             s_ShaderPlatformNames = names.ToArray();
             s_ShaderPlatformIndices = indices.ToArray();
+            currentPlatformMask &= platformMask;
         }
 
         public override Vector2 GetWindowSize()

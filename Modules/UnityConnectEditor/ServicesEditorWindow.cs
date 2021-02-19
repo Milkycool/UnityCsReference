@@ -10,6 +10,7 @@ using UnityEngine.UIElements;
 using UnityEditor.PackageManager;
 using UnityEditor.PackageManager.Requests;
 using UnityEditor.PackageManager.UI;
+using UnityEditor.Collaboration;
 
 using Button = UnityEngine.UIElements.Button;
 
@@ -50,8 +51,10 @@ namespace UnityEditor.Connect
         SortedList<string, SingleService> m_SortedServices;
         PackageCollection m_PackageCollection;
 
-        static ServicesEditorWindow s_Instance;
+        // LoadWindow guard
+        bool m_LoadWindowInProgress;
 
+        static ServicesEditorWindow s_Instance;
         public static ServicesEditorWindow instance => s_Instance;
         public UIElementsNotificationSubscriber notificationSubscriber { get; private set; }
 
@@ -77,13 +80,43 @@ namespace UnityEditor.Connect
             EditorAnalytics.SendEventShowService(new ServicesProjectSettings.ShowServiceState() { service = k_WindowTitle, page = "", referrer = "window_menu_item"});
         }
 
+        void OnStateRefreshRequired(ProjectInfo state)
+        {
+            // Reload the window to reflect the latest information...
+            LoadWindow();
+        }
+
+        void OnCollabStateChanged(CollabInfo info)
+        {
+            if (CollabService.instance.IsServiceEnabled() != Collab.instance.IsCollabEnabledForCurrentProject())
+            {
+                CollabService.instance.EnableService(Collab.instance.IsCollabEnabledForCurrentProject());
+            }
+        }
+
         void OnDestroy()
         {
             EditorAnalytics.SendEventCloseServiceWindow(new CloseServiceWindowState() { availableServices = m_StatusLabelByServiceName.Count });
         }
 
+        public void OnDisable()
+        {
+            // Make sure to pair the removal of the delegate with the OnEnable()
+            UnityConnect.instance.ProjectStateChanged -= OnStateRefreshRequired;
+
+            // Make sure to unpair the collab state change
+            Collab.instance.StateChanged -= OnCollabStateChanged;
+        }
+
         public void OnEnable()
         {
+            // Make sure the project is up-to-date
+            UnityConnect.instance.ProjectStateChanged += OnStateRefreshRequired;
+            // Make sure to follow-up the Collab State...
+            // Collab is a specific case where the service can be enabled inside another Editor Window by the Collab package code itself.
+            //     We need to be informed of that changed when it happens
+            Collab.instance.StateChanged += OnCollabStateChanged;
+
             if (s_Instance == null)
             {
                 s_Instance = this;
@@ -93,6 +126,13 @@ namespace UnityEditor.Connect
 
         void LoadWindow()
         {
+            // Do not reenter if already in progress...
+            if (m_LoadWindowInProgress)
+            {
+                return;
+            }
+            m_LoadWindowInProgress = true;
+
             rootVisualElement.Clear();
 
             var mainTemplate = EditorGUIUtility.Load(k_ServicesWindowUxmlPath) as VisualTreeAsset;
@@ -114,29 +154,28 @@ namespace UnityEditor.Connect
 
             rootVisualElement.Q<Button>(k_ProjectSettingsBtnName).clicked += () =>
             {
-                SettingsService.OpenProjectSettings(GeneralProjectSettings.generalProjectSettingsPath);
+                ServicesUtils.OpenServicesProjectSettings(GeneralProjectSettings.generalProjectSettingsPath, typeof(GeneralProjectSettings).Name);
             };
 
             var dashboardClickable = new Clickable(() =>
             {
-                if (!ServicesConfiguration.instance.pathsReady)
+                if (UnityConnect.instance.projectInfo.projectBound)
                 {
-                    NotificationManager.instance.Publish(Notification.Topic.ProjectBind, Notification.Severity.Error, L10n.Tr(k_ConnectionFailedMessage));
-                }
-                else if (UnityConnect.instance.projectInfo.projectBound)
-                {
-                    EditorAnalytics.SendOpenDashboardForService(new ServicesProjectSettings.OpenDashboardForService() {
-                        serviceName = k_WindowTitle,
-                        url = ServicesConfiguration.instance.baseDashboardUrl,
-                        organizationId = UnityConnect.instance.projectInfo.organizationId,
-                        projectId = UnityConnect.instance.projectInfo.projectId
+                    ServicesConfiguration.instance.RequestBaseDashboardUrl(baseDashboardUrl =>
+                    {
+                        EditorAnalytics.SendOpenDashboardForService(new ServicesProjectSettings.OpenDashboardForService() {
+                            serviceName = k_WindowTitle,
+                            url = baseDashboardUrl,
+                            organizationId = UnityConnect.instance.projectInfo.organizationId,
+                            projectId = UnityConnect.instance.projectInfo.projectId
+                        });
+                        ServicesConfiguration.instance.RequestCurrentProjectDashboardUrl(Application.OpenURL);
                     });
-                    Application.OpenURL(ServicesConfiguration.instance.GetCurrentProjectDashboardUrl());
                 }
                 else
                 {
                     NotificationManager.instance.Publish(Notification.Topic.ProjectBind, Notification.Severity.Warning, L10n.Tr(k_ProjectNotBoundMessage));
-                    SettingsService.OpenProjectSettings(GeneralProjectSettings.generalProjectSettingsPath);
+                    ServicesUtils.OpenServicesProjectSettings(GeneralProjectSettings.generalProjectSettingsPath, typeof(GeneralProjectSettings).Name);
                 }
             });
             rootVisualElement.Q(k_DashboardLinkName).AddManipulator(dashboardClickable);
@@ -146,7 +185,7 @@ namespace UnityEditor.Connect
             foreach (var service in ServicesRepository.GetServices())
             {
                 m_SortedServices.Add(service.title, service);
-                if (service.isPackage && service.packageId != null)
+                if (service.isPackage && service.packageName != null)
                 {
                     needProjectListOfPackage = true;
                 }
@@ -161,6 +200,7 @@ namespace UnityEditor.Connect
             else
             {
                 FinalizeServiceSetup();
+                m_LoadWindowInProgress = false;
             }
         }
 
@@ -174,6 +214,7 @@ namespace UnityEditor.Connect
                     m_PackageCollection = m_ListRequestOfPackage.Result;
                 }
                 FinalizeServiceSetup();
+                m_LoadWindowInProgress = false;
             }
         }
 
@@ -185,6 +226,9 @@ namespace UnityEditor.Connect
             var footer = scrollContainer.Q(k_FooterName);
             scrollContainer.Remove(footer);
 
+            // Make sure to clear the dictionary if previously filled-up
+            m_ClickableByServiceName.Clear();
+            m_StatusLabelByServiceName.Clear();
             foreach (var singleCloudService in m_SortedServices.Values)
             {
                 SetupService(scrollContainer, serviceTemplate, singleCloudService);
@@ -213,7 +257,7 @@ namespace UnityEditor.Connect
 
             Action openServiceSettingsLambda = () =>
             {
-                SettingsService.OpenProjectSettings(singleService.projectSettingsPath);
+                ServicesUtils.OpenServicesProjectSettings(singleService);
             };
             m_ClickableByServiceName.Add(singleService.name, new Clickable(openServiceSettingsLambda));
 
@@ -229,13 +273,13 @@ namespace UnityEditor.Connect
             var installButtonContainer = serviceRoot.Q(className: k_ServicePackageInstallContainerClassName);
             installButtonContainer.style.display = DisplayStyle.None;
 
-            if (singleService.isPackage && (singleService.packageId != null) && (m_PackageCollection != null))
+            if (singleService.isPackage && (singleService.packageName != null) && (m_PackageCollection != null))
             {
                 SetServiceToUninstalledState(installButton, serviceRoot, singleService);
                 bool packageFound = false;
                 foreach (var info in m_PackageCollection)
                 {
-                    if (info.packageId.Contains(singleService.packageId))
+                    if (info.name.Equals(singleService.packageName))
                     {
                         packageFound = true;
                         SetServiceToInstalledState(installButton, serviceRoot, singleService);
@@ -250,9 +294,9 @@ namespace UnityEditor.Connect
                     installButtonContainer.style.display = DisplayStyle.Flex;
                     installButton.clicked += () =>
                     {
-                        var packageId = singleService.packageId;
-                        EditorAnalytics.SendOpenPackManFromServiceSettings(new ServicesProjectSettings.OpenPackageManager() { packageName = packageId });
-                        PackageManagerWindow.OpenPackageManager(packageId);
+                        var packageName = singleService.packageName;
+                        EditorAnalytics.SendOpenPackManFromServiceSettings(new ServicesProjectSettings.OpenPackageManager() { packageName = packageName });
+                        PackageManagerWindow.OpenPackageManager(packageName);
                     };
                 }
             }

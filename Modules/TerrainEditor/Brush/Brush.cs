@@ -18,6 +18,17 @@ namespace UnityEditor
             ProjectWindowUtil.CreateAsset(b, "New Brush.brush");
         }
 
+        public void Reset()
+        {
+            m_Mask = DefaultMask();
+            m_Falloff = AnimationCurve.Linear(0, 0, 1, 1);
+            m_RadiusScale = 1.0f;
+            m_BlackWhiteRemapMin = 0.0f;
+            m_BlackWhiteRemapMax = 1.0f;
+            m_InvertRemapRange = false;
+            readOnly = false;
+        }
+
         // Don't instantiate directly, use Brush.CreateInstance()
         protected Brush() {}
 
@@ -114,8 +125,14 @@ namespace UnityEditor
             if (s_CreateBrushMaterial == null)
                 s_CreateBrushMaterial = new Material(EditorGUIUtility.LoadRequired("Brushes/CreateBrush.shader") as Shader);
 
+            TextureFormat falloffFormat = TextureFormat.R16;
+
+            // fallback for old platforms (GLES2).. ugly quantization but approximately correct
+            if (!SystemInfo.SupportsTextureFormat(falloffFormat))
+                falloffFormat = TextureFormat.RGBA32;
+
             int sampleCount = Mathf.Max(width, 1024);
-            Texture2D falloffTex = new Texture2D(sampleCount, 1, TextureFormat.R16, false);
+            Texture2D falloffTex = new Texture2D(sampleCount, 1, falloffFormat, false);
             Color[] falloffPix = new Color[sampleCount];
             for (int i = 0; i < sampleCount; i++)
             {

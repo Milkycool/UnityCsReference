@@ -42,6 +42,12 @@ namespace UnityEditor.PackageManager.UI
                 if (versions.installed != null)
                     return PackageState.Installed;
 
+                if (primary.HasTag(PackageTag.Downloadable))
+                    return PackageState.DownloadAvailable;
+
+                if (primary.HasTag(PackageTag.Installable))
+                    return PackageState.InstallAvailable;
+
                 return PackageState.None;
             }
         }
@@ -74,9 +80,12 @@ namespace UnityEditor.PackageManager.UI
             m_Errors.Add(error);
         }
 
-        public void ClearErrors()
+        public void ClearErrors(Predicate<UIError> match = null)
         {
-            m_Errors.Clear();
+            if (match == null)
+                m_Errors.Clear();
+            else
+                m_Errors.RemoveAll(match);
         }
 
         [SerializeField]

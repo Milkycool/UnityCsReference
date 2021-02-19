@@ -58,6 +58,7 @@ namespace UnityEditor
         SerializedProperty m_EnabledBakedGI;
         SerializedProperty m_MixedBakeMode;
         SerializedProperty m_AlbedoBoost;
+        SerializedProperty m_IndirectOutputScale;
         SerializedProperty m_LightmapParameters;
         SerializedProperty m_LightmapDirectionalMode;
         SerializedProperty m_BakeResolution;
@@ -173,7 +174,7 @@ namespace UnityEditor
             {
                 EditorGUIUtility.TrTextContent("Mixed lights provide realtime direct lighting while indirect light is baked into lightmaps and light probes."),
                 EditorGUIUtility.TrTextContent("Mixed lights provide baked direct and indirect lighting for static objects. Dynamic objects receive realtime direct lighting and cast shadows on static objects using the main directional light in the scene."),
-                EditorGUIUtility.TrTextContent("Mixed lights provide realtime direct lighting. Indirect lighting gets baked into lightmaps and light probes. Shadowmasks and light probes occlusion get generated for baked shadows. The Shadowmask Mode used at run time can be set in the Quality Settings panel.")
+                EditorGUIUtility.TrTextContent("Mixed lights provide realtime direct lighting. Indirect lighting gets baked into lightmaps and light probes. Shadowmasks and light probes occlusion get generated for baked shadows. ")
             };
 
             public static readonly GUIContent lightmapperNotSupportedWarning = EditorGUIUtility.TrTextContent("The Lightmapper is not supported by the current render pipeline. Fallback is ");
@@ -185,8 +186,10 @@ namespace UnityEditor
             public static readonly GUIContent bounceScale = EditorGUIUtility.TrTextContent("Bounce Scale", "Multiplier for indirect lighting. Use with care.");
             public static readonly GUIContent updateThreshold = EditorGUIUtility.TrTextContent("Update Threshold", "Threshold for updating realtime GI. A lower value causes more frequent updates (default 1.0).");
             public static readonly GUIContent albedoBoost = EditorGUIUtility.TrTextContent("Albedo Boost", "Controls the amount of light bounced between surfaces by intensifying the albedo of materials in the scene. Increasing this draws the albedo value towards white for indirect light computation. The default value is physically accurate.");
+            public static readonly GUIContent indirectOutputScale = EditorGUIUtility.TrTextContent("Indirect Intensity", "Controls the brightness of indirect light stored in realtime and baked lightmaps. A value above 1.0 will increase the intensity of indirect light while a value less than 1.0 will reduce indirect light intensity.");
             public static readonly GUIContent lightmapDirectionalMode = EditorGUIUtility.TrTextContent("Directional Mode", "Controls whether baked and realtime lightmaps will store directional lighting information from the lighting environment. Options are Directional and Non-Directional.");
-            public static readonly GUIContent defaultLightmapParameters = EditorGUIUtility.TrTextContent("Lightmap Parameters", "Allows the adjustment of advanced parameters that affect the process of generating a lightmap for an object using global illumination.");
+            public static readonly GUIContent lightmapParameters = EditorGUIUtility.TrTextContent("Lightmap Parameters", "Allows the adjustment of advanced parameters that affect the process of generating a lightmap for an object using global illumination.");
+            public static readonly GUIContent lightmapParametersDefault = EditorGUIUtility.TrTextContent("Default-Medium");
             public static readonly GUIContent realtimeLightsLabel = EditorGUIUtility.TrTextContent("Realtime Lighting", "Precompute Realtime indirect lighting for realtime lights and static objects. In this mode realtime lights, ambient lighting, materials of static objects (including emission) will generate indirect lighting at runtime. Only static objects are blocking and bouncing light, dynamic objects receive indirect lighting via light probes.");
             public static readonly GUIContent realtimeEnvironmentLighting = EditorGUIUtility.TrTextContent("Realtime Environment Lighting", "Specifies the Global Illumination mode that should be used for handling ambient light in the Scene. This property is not editable unless both Realtime Global Illumination and Baked Global Illumination are enabled for the scene.");
             public static readonly GUIContent mixedLightsLabel = EditorGUIUtility.TrTextContent("Mixed Lighting", "Bake Global Illumination for mixed lights and static objects. May bake both direct and/or indirect lighting based on settings. Only static objects are blocking and bouncing light, dynamic objects receive baked lighting via light probes.");
@@ -240,7 +243,7 @@ namespace UnityEditor
             public static readonly GUIContent culling = EditorGUIUtility.TrTextContent("Progressive Updates", "Specifies whether the lightmapper should prioritize baking what is visible in the scene view. When disabled, lightmaps are only composited once fully converged which can improve baking performance.");
             public static readonly GUIContent environmentMIS = EditorGUIUtility.TrTextContent("Multiple Importance Sampling", "Specifies whether to use multiple importance sampling for sampling the environment. This will generally lead to faster convergence when generating lightmaps but can lead to noisier results in certain low frequency environments.");
             public static readonly GUIContent environmentSampleCount = EditorGUIUtility.TrTextContent("Environment Samples", "Controls the number of samples the lightmapper will use for environment lighting calculations. Increasing this value may improve the quality of lightmaps but increases the time required for baking to complete.");
-            public static readonly GUIContent probeSampleCountMultiplier = EditorGUIUtility.TrTextContent("Light Probe Sample Multiplier", "Controls how many samples are used for Light Probes as a multiplier of the general sample counts above. Higher values improve the quality of Light Probes, but also take longer to bake. Enable the Light Probe sample count multiplier in the Editor tab under Project Settings.");
+            public static readonly GUIContent probeSampleCountMultiplier = EditorGUIUtility.TrTextContent("Light Probe Sample Multiplier", "Controls how many samples are used for Light Probes as a multiplier of the general sample counts above. Higher values improve the quality of Light Probes, but also take longer to bake. Enable the Light Probe sample count multiplier by disabling Project Settings > Editor > Use legacy Light Probe sample counts");
 
             public static readonly GUIStyle labelStyle = EditorStyles.wordWrappedMiniLabel;
         }
@@ -259,16 +262,18 @@ namespace UnityEditor
             {
                 bool iterative = m_GIWorkflowMode.intValue == (int)Lightmapping.GIWorkflowMode.Iterative;
 
+                var rect = EditorGUILayout.GetControlRect();
+                EditorGUI.BeginProperty(rect, Styles.autoGenerate, m_GIWorkflowMode);
                 EditorGUI.BeginChangeCheck();
 
-                EditorGUI.showMixedValue = m_GIWorkflowMode.hasMultipleDifferentValues;
-                iterative = EditorGUILayout.Toggle(Styles.autoGenerate, iterative);
+                iterative = EditorGUI.Toggle(rect, Styles.autoGenerate, iterative);
 
                 if (EditorGUI.EndChangeCheck())
                 {
                     m_GIWorkflowMode.intValue = (int)(iterative ? Lightmapping.GIWorkflowMode.Iterative : Lightmapping.GIWorkflowMode.OnDemand);
                 }
-                EditorGUI.showMixedValue = false;
+                EditorGUI.EndProperty();
+
                 EditorGUILayout.Space();
             }
 
@@ -294,6 +299,7 @@ namespace UnityEditor
                 m_BakeBackend = lso.FindProperty("m_BakeBackend");
                 m_MixedBakeMode = lso.FindProperty("m_MixedBakeMode");
                 m_AlbedoBoost = lso.FindProperty("m_AlbedoBoost");
+                m_IndirectOutputScale = lso.FindProperty("m_IndirectOutputScale");
                 m_LightmapMaxSize = lso.FindProperty("m_LightmapMaxSize");
                 m_LightmapParameters = lso.FindProperty("m_LightmapParameters");
                 m_LightmapDirectionalMode = lso.FindProperty("m_LightmapsBakeMode");
@@ -467,7 +473,7 @@ namespace UnityEditor
                             }
                             else if (enableBakedGI)
                             {
-                                EditorGUILayout.HelpBox(Styles.helpStringsMixed[m_MixedBakeMode.intValue].text, MessageType.Info);
+                                EditorGUILayout.HelpBox(Styles.helpStringsMixed[m_MixedBakeMode.intValue].text + EditorGUIUtility.TrTextContent(SupportedRenderingFeatures.active.shadowmaskMessage).text, MessageType.Info);
                             }
                         }
                     }
@@ -532,25 +538,27 @@ namespace UnityEditor
 
                                     EditorGUILayout.PropertyField(m_PVRCulling, Styles.culling);
 
+                                    var rect = EditorGUILayout.GetControlRect();
+                                    EditorGUI.BeginProperty(rect, Styles.environmentMIS, m_PVREnvironmentMIS);
+                                    EditorGUI.BeginChangeCheck();
                                     bool enableMIS = (m_PVREnvironmentMIS.intValue & 1) != 0;
-                                    if (EditorGUILayout.Toggle(Styles.environmentMIS, enableMIS))
-                                        m_PVREnvironmentMIS.intValue |= 1;
-                                    else
-                                        m_PVREnvironmentMIS.intValue &= ~1;
+
+                                    enableMIS = EditorGUI.Toggle(rect, Styles.environmentMIS, enableMIS);
+
+                                    if (EditorGUI.EndChangeCheck())
+                                    {
+                                        if (enableMIS)
+                                            m_PVREnvironmentMIS.intValue |= 1;
+                                        else
+                                            m_PVREnvironmentMIS.intValue &= ~1;
+                                    }
+                                    EditorGUI.EndProperty();
 
                                     // Sampling type
                                     //EditorGUILayout.PropertyField(m_PvrSampling, Styles.m_PVRSampling); // TODO(PVR): make non-fixed sampling modes work.
 
                                     if (m_PVRSampling.intValue != (int)LightingSettings.Sampling.Auto)
                                     {
-                                        // Update those constants also in LightmapBake.cpp UpdateSamples() and LightmapBake.h.
-                                        // NOTE: sample count needs to be a power of two as we are using Sobol sequence.
-                                        const int kMinDirectSamples = 1;
-                                        const int kMinEnvironmentSamples = 8;
-                                        const int kMinSamples = 8;
-                                        //We are counting the samples number on int32 hence the limitation here
-                                        const int kMaxSamples = int.MaxValue;
-
                                         // Sample count
                                         // TODO(PVR): make non-fixed sampling modes work.
                                         //EditorGUI.indentLevel++;
@@ -560,45 +568,11 @@ namespace UnityEditor
 
                                         EditorGUILayout.PropertyField(m_PVRDirectSampleCount, Styles.directSampleCount);
                                         EditorGUILayout.PropertyField(m_PVRSampleCount, Styles.indirectSampleCount);
-
-                                        if (m_PVRSampleCount.intValue < kMinSamples ||
-                                            m_PVRSampleCount.intValue > kMaxSamples)
-                                        {
-                                            m_PVRSampleCount.intValue = Math.Max(Math.Min(m_PVRSampleCount.intValue, kMaxSamples), kMinSamples);
-                                        }
-
-                                        if (m_PVRDirectSampleCount.intValue < kMinDirectSamples ||
-                                            m_PVRDirectSampleCount.intValue > kMaxSamples)
-                                        {
-                                            m_PVRDirectSampleCount.intValue = Math.Max(Math.Min(m_PVRDirectSampleCount.intValue, kMaxSamples), kMinDirectSamples);
-                                        }
-
                                         EditorGUILayout.PropertyField(m_PVREnvironmentSampleCount, Styles.environmentSampleCount);
-
-                                        if (m_PVREnvironmentSampleCount.intValue < kMinEnvironmentSamples || m_PVREnvironmentSampleCount.intValue > kMaxSamples)
-                                        {
-                                            m_PVREnvironmentSampleCount.intValue = Math.Max(Math.Min(m_PVREnvironmentSampleCount.intValue, kMaxSamples), kMinEnvironmentSamples);
-                                        }
 
                                         using (new EditorGUI.DisabledScope(EditorSettings.useLegacyProbeSampleCount))
                                         {
                                             EditorGUILayout.PropertyField(m_LightProbeSampleCountMultiplier, Styles.probeSampleCountMultiplier);
-                                            int directSampleCount = m_PVRDirectSampleCount.intValue;
-                                            int indirectSampleCount = m_PVRSampleCount.intValue;
-                                            int environmentSampleCount = m_PVREnvironmentSampleCount.intValue;
-                                            int maxSampleCount = Math.Max(directSampleCount, Math.Max(indirectSampleCount, environmentSampleCount));
-                                            float maxMultiplier = (float)kMaxSamples / (float)maxSampleCount;
-                                            if (m_LightProbeSampleCountMultiplier.floatValue > maxMultiplier)
-                                            {
-                                                m_LightProbeSampleCountMultiplier.floatValue = Math.Min(m_LightProbeSampleCountMultiplier.floatValue, maxMultiplier);
-                                                if (m_LightProbeSampleCountMultiplier.floatValue > 2.0f)
-                                                    m_LightProbeSampleCountMultiplier.floatValue = (float)Math.Floor((double)m_LightProbeSampleCountMultiplier.floatValue);
-                                            }
-                                            float minMultiplier = (float)kMinSamples / (float)maxSampleCount;
-                                            if (m_LightProbeSampleCountMultiplier.floatValue < minMultiplier)
-                                            {
-                                                m_LightProbeSampleCountMultiplier.floatValue = Math.Max(m_LightProbeSampleCountMultiplier.floatValue, minMultiplier);
-                                            }
                                         }
 
                                         // TODO(PVR): make non-fixed sampling modes work.
@@ -717,8 +691,6 @@ namespace UnityEditor
                             {
                                 EditorGUI.indentLevel++;
                                 EditorGUILayout.PropertyField(m_AOMaxDistance, Styles.AOMaxDistance);
-                                if (m_AOMaxDistance.floatValue < 0.0f)
-                                    m_AOMaxDistance.floatValue = 0.0f;
                                 EditorGUILayout.Slider(m_CompAOExponent, 0.0f, 10.0f, Styles.ambientOcclusionContribution);
                                 EditorGUILayout.Slider(m_CompAOExponentDirect, 0.0f, 10.0f, Styles.ambientOcclusionContributionDirect);
 
@@ -748,11 +720,9 @@ namespace UnityEditor
 
                     // albedo boost, push the albedo value towards one in order to get more bounce
                     EditorGUILayout.Slider(m_AlbedoBoost, 1.0f, 10.0f, Styles.albedoBoost);
+                    EditorGUILayout.Slider(m_IndirectOutputScale, 0.0f, 5.0f, Styles.indirectOutputScale);
 
-                    if (LightmapParametersGUI(m_LightmapParameters, Styles.defaultLightmapParameters))
-                    {
-                        EditorWindow.FocusWindowIfItsOpen<InspectorWindow>();
-                    }
+                    LightmapParametersGUI(m_LightmapParameters, Styles.lightmapParameters);
                 }
 
                 EditorGUI.indentLevel--;
@@ -857,44 +827,29 @@ namespace UnityEditor
             return true;
         }
 
-        static bool LightmapParametersGUI(SerializedProperty prop, GUIContent content)
+        static void LightmapParametersGUI(SerializedProperty prop, GUIContent content)
         {
             EditorGUILayout.BeginHorizontal();
 
-            EditorGUIInternal.AssetPopup<LightmapParameters>(prop, content, "giparams", "Default-Medium");
+            var rect = EditorGUILayout.GetControlRect();
+            EditorGUI.BeginProperty(rect, content, prop);
 
-            string label = "Edit...";
+            rect = EditorGUI.PrefixLabel(rect, content);
+            GUIContent buttonContent = prop.hasMultipleDifferentValues ? EditorGUI.mixedValueContent : (prop.objectReferenceValue != null ? GUIContent.Temp(prop.objectReferenceStringValue) : Styles.lightmapParametersDefault);
 
-            if (isBuiltIn(prop))
-                label = "View";
+            if (EditorGUI.DropdownButton(rect, buttonContent, FocusType.Passive, EditorStyles.popup))
+                AssetPopupBackend.ShowAssetsPopupMenu<LightmapParameters>(rect, prop.objectReferenceTypeString, prop, "giparams", Styles.lightmapParametersDefault.text);
 
-            bool editClicked = false;
+            string label = isBuiltIn(prop) ? "View" : "Edit...";
 
-            if (prop.objectReferenceValue == null)
+            if (GUILayout.Button(label, EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
             {
-                var defaults = AssetDatabase.GetBuiltinExtraResource<LightmapParameters>("LightmapParameters/Default-Medium.giparams");
-
-                using (new EditorGUI.DisabledScope(!defaults))
-                {
-                    if (GUILayout.Button(label, EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
-                    {
-                        Selection.activeObject = defaults;
-                        editClicked = true;
-                    }
-                }
-            }
-            else
-            {
-                if (GUILayout.Button(label, EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
-                {
-                    Selection.activeObject = prop.objectReferenceValue;
-                    editClicked = true;
-                }
+                Selection.activeObject = prop.objectReferenceValue;
+                EditorWindow.FocusWindowIfItsOpen<InspectorWindow>();
             }
 
             EditorGUILayout.EndHorizontal();
-
-            return editClicked;
+            EditorGUI.EndProperty();
         }
 
         static bool DenoiserSupported(LightingSettings.DenoiserType denoiserType)

@@ -3,10 +3,7 @@
 // https://unity3d.com/legal/licenses/Unity_Reference_Only_License
 
 using System;
-using System.IO;
 using UnityEngine;
-using UnityEditor;
-using UnityEditor.Animations;
 using UnityEditorInternal;
 using System.Collections.Generic;
 using UnityEditor.Experimental.AssetImporters;
@@ -21,17 +18,7 @@ namespace UnityEditor
         AnimationClipEditor m_AnimationClipEditor;
         ModelImporter singleImporter { get { return targets[0] as ModelImporter; } }
 
-        public int m_SelectedClipIndexDoNotUseDirectly = -1;
-        public int selectedClipIndex
-        {
-            get { return m_SelectedClipIndexDoNotUseDirectly; }
-            set
-            {
-                m_SelectedClipIndexDoNotUseDirectly = value;
-                if (m_ClipList != null)
-                    m_ClipList.index = value;
-            }
-        }
+        internal const string ActiveClipIndex = "ModelImporterClipEditor.ActiveClipIndex";
 
         public string selectedClipName
         {
@@ -42,39 +29,98 @@ namespace UnityEditor
             }
         }
 
+        private class ClipInformation
+        {
+            SerializedProperty prop;
+
+            public ClipInformation(SerializedProperty clipProperty)
+            {
+                prop = clipProperty;
+                animationClipProperty = clipProperty;
+            }
+
+            public SerializedProperty animationClipProperty { get; }
+            AnimationClipInfoProperties m_Property;
+            public AnimationClipInfoProperties property => m_Property ?? (m_Property = new AnimationClipInfoProperties(animationClipProperty));
+
+            public string name
+            {
+                get { return prop.FindPropertyRelative("name").stringValue; }
+            }
+
+            public string firstFrame
+            {
+                get { return prop.FindPropertyRelative("firstFrame").floatValue.ToString("0.0", CultureInfo.InvariantCulture.NumberFormat); }
+            }
+
+            public string lastFrame
+            {
+                get { return prop.FindPropertyRelative("lastFrame").floatValue.ToString("0.0", CultureInfo.InvariantCulture.NumberFormat); }
+            }
+        }
+
         SerializedObject m_DefaultClipsSerializedObject = null;
 
+#pragma warning disable 0649
+        [CacheProperty]
         SerializedProperty m_AnimationType;
 
+        [CacheProperty]
         SerializedProperty m_ImportAnimation;
+        [CacheProperty]
         SerializedProperty m_ClipAnimations;
+        [CacheProperty]
         SerializedProperty m_BakeSimulation;
+        [CacheProperty]
         SerializedProperty m_ResampleCurves;
+        [CacheProperty]
         SerializedProperty m_AnimationCompression;
+        [CacheProperty]
         SerializedProperty m_AnimationRotationError;
+        [CacheProperty]
         SerializedProperty m_AnimationPositionError;
+        [CacheProperty]
         SerializedProperty m_AnimationScaleError;
+        [CacheProperty]
         SerializedProperty m_AnimationWrapMode;
+        [CacheProperty]
         SerializedProperty m_LegacyGenerateAnimations;
+        [CacheProperty]
         SerializedProperty m_ImportAnimatedCustomProperties;
+        [CacheProperty]
         SerializedProperty m_ImportConstraints;
 
+        [CacheProperty]
         SerializedProperty m_MotionNodeName;
+#pragma warning restore 0649
+
         public int motionNodeIndex { get; set; }
 
         public int pivotNodeIndex { get; set; }
 
+#pragma warning disable 0649
+        [CacheProperty]
         private SerializedProperty m_RigImportErrors;
+        [CacheProperty]
         private SerializedProperty m_RigImportWarnings;
+        [CacheProperty]
         private SerializedProperty m_AnimationImportErrors;
+        [CacheProperty]
         private SerializedProperty m_AnimationImportWarnings;
+        [CacheProperty]
         private SerializedProperty m_AnimationRetargetingWarnings;
+        [CacheProperty]
         private SerializedProperty m_AnimationDoRetargetingWarnings;
+#pragma warning restore 0649
+
+        string m_Errors;
+        string m_Warnings;
+        string m_RigWarnings;
+        string m_RetargetWarnings;
 
         GUIContent[] m_MotionNodeList;
-        static private bool motionNodeFoldout = false;
-
-        private static bool importMessageFoldout = false;
+        private static bool s_MotionNodeFoldout = false;
+        private static bool s_ImportMessageFoldout = false;
 
         ReorderableList m_ClipList;
 
@@ -173,80 +219,56 @@ namespace UnityEditor
 
         public ModelImporterClipEditor(AssetImporterEditor panelContainer)
             : base(panelContainer)
-        {}
+        {
+            //Generate new Clip List
+            m_ClipList = new ReorderableList(new List<ClipInformation>(), typeof(string), false, true, true, true);
+            m_ClipList.onAddCallback = AddClipInList;
+            m_ClipList.onSelectCallback = SelectClipInList;
+            m_ClipList.onRemoveCallback = RemoveClipInList;
+            m_ClipList.drawElementCallback = DrawClipElement;
+            m_ClipList.drawHeaderCallback = DrawClipHeader;
+            m_ClipList.elementHeight = EditorGUI.kSingleLineHeight;
+        }
+
         internal override void OnEnable()
         {
-            m_ClipAnimations = serializedObject.FindProperty("m_ClipAnimations");
+            Editor.AssignCachedProperties(this, serializedObject.GetIterator());
 
-            m_AnimationType = serializedObject.FindProperty("m_AnimationType");
-            m_LegacyGenerateAnimations = serializedObject.FindProperty("m_LegacyGenerateAnimations");
+            // caching errors values now as they can't change until next re-import that will triggers a new OnEnable
+            m_Errors = m_AnimationImportErrors.stringValue;
+            m_Warnings = m_AnimationImportWarnings.stringValue;
+            m_RigWarnings = m_RigImportWarnings.stringValue;
+            m_RetargetWarnings = m_AnimationRetargetingWarnings.stringValue;
 
-            // Animation
-            m_ImportAnimation = serializedObject.FindProperty("m_ImportAnimation");
-            m_BakeSimulation = serializedObject.FindProperty("m_BakeSimulation");
-            m_ResampleCurves = serializedObject.FindProperty("m_ResampleCurves");
-            m_AnimationCompression = serializedObject.FindProperty("m_AnimationCompression");
-            m_AnimationRotationError = serializedObject.FindProperty("m_AnimationRotationError");
-            m_AnimationPositionError = serializedObject.FindProperty("m_AnimationPositionError");
-            m_AnimationScaleError = serializedObject.FindProperty("m_AnimationScaleError");
-            m_AnimationWrapMode = serializedObject.FindProperty("m_AnimationWrapMode");
-            m_ImportAnimatedCustomProperties = serializedObject.FindProperty("m_ImportAnimatedCustomProperties");
-            m_ImportConstraints = serializedObject.FindProperty("m_ImportConstraints");
-
-            m_RigImportErrors = serializedObject.FindProperty("m_RigImportErrors");
-            m_RigImportWarnings = serializedObject.FindProperty("m_RigImportWarnings");
-            m_AnimationImportErrors = serializedObject.FindProperty("m_AnimationImportErrors");
-            m_AnimationImportWarnings = serializedObject.FindProperty("m_AnimationImportWarnings");
-            m_AnimationRetargetingWarnings = serializedObject.FindProperty("m_AnimationRetargetingWarnings");
-            m_AnimationDoRetargetingWarnings = serializedObject.FindProperty("m_AnimationDoRetargetingWarnings");
+            RegisterListeners();
 
             if (serializedObject.isEditingMultipleObjects)
                 return;
 
-            // Find all serialized property before calling SetupDefaultClips
-            if (m_ClipAnimations.arraySize == 0)
-                SetupDefaultClips();
-
-
-            selectedClipIndex = EditorPrefs.GetInt("ModelImporterClipEditor.ActiveClipIndex", 0);
-            ValidateClipSelectionIndex();
-            EditorPrefs.SetInt("ModelImporterClipEditor.ActiveClipIndex", selectedClipIndex);
-
-            if (m_AnimationClipEditor != null && selectedClipIndex >= 0)
-                SyncClipEditor();
-
-            // Automatically select the first clip
-            if (m_ClipAnimations.arraySize != 0)
-                SelectClip(selectedClipIndex);
+            //Sometimes we dont want to start at the 0th index, this is where we're editing a clip - see
+            m_ClipList.index = EditorPrefs.GetInt(ActiveClipIndex, 0);
+            EditorPrefs.SetInt(ActiveClipIndex, m_ClipList.index);
+            //Reset the Model Importer to its serialized copy
+            DeserializeClips();
 
             string[] transformPaths = singleImporter.transformPaths;
             m_MotionNodeList = new GUIContent[transformPaths.Length + 1];
 
             m_MotionNodeList[0] = EditorGUIUtility.TrTextContent("<None>");
+            if (m_MotionNodeList.Length > 1)
+                m_MotionNodeList[1] = EditorGUIUtility.TrTextContent("<Root Transform>");
 
-            for (int i = 0; i < transformPaths.Length; i++)
-            {
-                if (i == 0)
-                {
-                    m_MotionNodeList[1] = EditorGUIUtility.TrTextContent("<Root Transform>");
-                }
-                else
-                {
-                    m_MotionNodeList[i + 1] = new GUIContent(transformPaths[i]);
-                }
-            }
+            for (int i = 1; i < transformPaths.Length; i++)
+                m_MotionNodeList[i + 1] = new GUIContent(transformPaths[i]);
 
-            m_MotionNodeName = serializedObject.FindProperty("m_MotionNodeName");
             motionNodeIndex = ArrayUtility.FindIndex(m_MotionNodeList, delegate(GUIContent content) { return content.text == m_MotionNodeName.stringValue; });
             motionNodeIndex = motionNodeIndex < 1 ? 0 : motionNodeIndex;
         }
 
-        void SyncClipEditor()
+        void SyncClipEditor(AnimationClipInfoProperties info)
         {
             if (m_AnimationClipEditor == null || m_MaskInspector == null)
                 return;
-
-            AnimationClipInfoProperties info = GetAnimationClipInfoAtIndex(selectedClipIndex);
 
             // It mandatory to set clip info into mask inspector first, this will update m_Mask.
             m_MaskInspector.clipInfo = info;
@@ -301,17 +323,10 @@ namespace UnityEditor
             m_DefaultClipsSerializedObject = null;
 
             PatchDefaultClipTakeNamesToSplitClipNames();
+            UpdateList();
 
-            SyncClipEditor();
-        }
-
-        private void ValidateClipSelectionIndex()
-        {
-            // selected clip index can be invalid if array was changed and then reverted.
-            if (selectedClipIndex > m_ClipAnimations.arraySize - 1)
-            {
-                selectedClipIndex = 0;
-            }
+            if (m_ClipList.index >= 0)
+                SyncClipEditor(((ClipInformation)m_ClipList.list[m_ClipList.index]).property);
         }
 
         internal override void OnDestroy()
@@ -321,6 +336,7 @@ namespace UnityEditor
 
         internal override void OnDisable()
         {
+            UnregisterListeners();
             DestroyEditorsAndData();
 
             base.OnDisable();
@@ -329,36 +345,23 @@ namespace UnityEditor
         internal override void ResetValues()
         {
             base.ResetValues();
-            m_ClipAnimations = serializedObject.FindProperty("m_ClipAnimations");
-            m_AnimationType = serializedObject.FindProperty("m_AnimationType");
-            m_DefaultClipsSerializedObject = null;
-            if (m_ClipAnimations.arraySize == 0)
-                SetupDefaultClips();
-
-            ValidateClipSelectionIndex();
-            UpdateList();
-            SelectClip(selectedClipIndex);
+            DeserializeClips();
         }
 
         void AnimationClipGUI()
         {
-            string errors = m_AnimationImportErrors.stringValue;
-            string warnings = m_AnimationImportWarnings.stringValue;
-            string rigWarnings = m_RigImportWarnings.stringValue;
-            string retargetWarnings = m_AnimationRetargetingWarnings.stringValue;
-
-            if (errors.Length > 0)
+            if (m_Errors.Length > 0)
             {
                 EditorGUILayout.HelpBox(styles.ErrorsFoundWhileImportingThisAnimation);
             }
             else
             {
-                if (rigWarnings.Length > 0)
+                if (m_RigWarnings.Length > 0)
                 {
                     EditorGUILayout.HelpBox(styles.WarningsFoundWhileImportingRig);
                 }
 
-                if (warnings.Length > 0)
+                if (m_Warnings.Length > 0)
                 {
                     EditorGUILayout.HelpBox(styles.WarningsFoundWhileImportingThisAnimation);
                 }
@@ -384,23 +387,23 @@ namespace UnityEditor
 
             RootMotionNodeSettings();
 
-            importMessageFoldout = EditorGUILayout.Foldout(importMessageFoldout, styles.ImportMessages, true);
+            s_ImportMessageFoldout = EditorGUILayout.Foldout(s_ImportMessageFoldout, styles.ImportMessages, true);
 
-            if (importMessageFoldout)
+            if (s_ImportMessageFoldout)
             {
-                if (errors.Length > 0)
-                    EditorGUILayout.HelpBox(L10n.Tr(errors), MessageType.Error);
-                if (warnings.Length > 0)
-                    EditorGUILayout.HelpBox(L10n.Tr(warnings), MessageType.Warning);
+                if (m_Errors.Length > 0)
+                    EditorGUILayout.HelpBox(L10n.Tr(m_Errors), MessageType.Error);
+                if (m_Warnings.Length > 0)
+                    EditorGUILayout.HelpBox(L10n.Tr(m_Warnings), MessageType.Warning);
                 if (animationType == ModelImporterAnimationType.Human)
                 {
                     EditorGUILayout.PropertyField(m_AnimationDoRetargetingWarnings, styles.GenerateRetargetingWarnings);
 
                     if (m_AnimationDoRetargetingWarnings.boolValue)
                     {
-                        if (retargetWarnings.Length > 0)
+                        if (m_RetargetWarnings.Length > 0)
                         {
-                            EditorGUILayout.HelpBox(L10n.Tr(retargetWarnings), MessageType.Info);
+                            EditorGUILayout.HelpBox(L10n.Tr(m_RetargetWarnings), MessageType.Info);
                         }
                     }
                     else
@@ -417,12 +420,17 @@ namespace UnityEditor
                 styles = new Styles();
 
             EditorGUILayout.PropertyField(m_ImportConstraints, styles.ImportConstraints);
-            EditorGUILayout.PropertyField(m_ImportAnimation, styles.ImportAnimations);
+
+            using (var check = new EditorGUI.ChangeCheckScope())
+            {
+                EditorGUILayout.PropertyField(m_ImportAnimation, styles.ImportAnimations);
+                if (check.changed)
+                    DeserializeClips();
+            }
 
             if (m_ImportAnimation.boolValue && !m_ImportAnimation.hasMultipleDifferentValues)
             {
                 bool hasNoValidAnimationData = targets.Length == 1 && singleImporter.importedTakeInfos.Length == 0 && singleImporter.animationType != ModelImporterAnimationType.None;
-
                 if (IsDeprecatedMultiAnimationRootImport())
                     EditorGUILayout.HelpBox(styles.AnimationDataWas);
                 else if (hasNoValidAnimationData)
@@ -451,10 +459,15 @@ namespace UnityEditor
                     EditorGUILayout.HelpBox(styles.TheRigsOfTheSelectedModelsAre);
                 else
                 {
-                    if (m_ImportAnimation.boolValue && !m_ImportAnimation.hasMultipleDifferentValues)
-                        AnimationClipGUI();
+                    AnimationClipGUI();
                 }
             }
+        }
+
+        internal override void PostApply()
+        {
+            base.PostApply();
+            DeserializeClips();
         }
 
         void AnimationSettings()
@@ -514,9 +527,9 @@ namespace UnityEditor
         {
             if (animationType == ModelImporterAnimationType.Human || animationType == ModelImporterAnimationType.Generic)
             {
-                motionNodeFoldout = EditorGUILayout.Foldout(motionNodeFoldout, styles.MotionSetting, true);
+                s_MotionNodeFoldout = EditorGUILayout.Foldout(s_MotionNodeFoldout, styles.MotionSetting, true);
 
-                if (motionNodeFoldout)
+                if (s_MotionNodeFoldout)
                 {
                     EditorGUI.BeginChangeCheck();
                     motionNodeIndex = EditorGUILayout.Popup(styles.MotionNode, motionNodeIndex, m_MotionNodeList);
@@ -567,31 +580,31 @@ namespace UnityEditor
 
             DestroyEditorsAndData();
 
-            selectedClipIndex = selected;
-            if (selectedClipIndex < 0 || selectedClipIndex >= m_ClipAnimations.arraySize)
-            {
-                selectedClipIndex = -1;
+            m_ClipList.index = selected;
+            if (m_ClipList.index < 0)
                 return;
-            }
 
-            AnimationClipInfoProperties info = GetAnimationClipInfoAtIndex(selected);
+            AnimationClipInfoProperties info = ((ClipInformation)m_ClipList.list[m_ClipList.index]).property;
             AnimationClip clip = singleImporter.GetPreviewAnimationClipForTake(info.takeName);
             if (clip != null)
             {
                 m_AnimationClipEditor = (AnimationClipEditor)Editor.CreateEditor(clip, typeof(AnimationClipEditor));
                 InitMask(info);
-                SyncClipEditor();
+                SyncClipEditor(info);
             }
         }
 
         void UpdateList()
         {
-            if (m_ClipList == null)
-                return;
-            List<AnimationClipInfoProperties> clipInfos = new List<AnimationClipInfoProperties>();
+            List<ClipInformation> clipInfos = new List<ClipInformation>();
+            var prop = m_ClipAnimations.FindPropertyRelative("Array.size");
             for (int i = 0; i < m_ClipAnimations.arraySize; i++)
-                clipInfos.Add(GetAnimationClipInfoAtIndex(i));
+            {
+                prop.Next(false);
+                clipInfos.Add(new ClipInformation(prop.Copy()));
+            }
             m_ClipList.list = clipInfos;
+            m_ClipList.index = Mathf.Clamp(m_ClipList.index, -1, m_ClipAnimations.arraySize - 1);
         }
 
         void AddClipInList(ReorderableList list)
@@ -601,9 +614,9 @@ namespace UnityEditor
 
 
             int takeIndex = 0;
-            if (0 < selectedClipIndex && selectedClipIndex < m_ClipAnimations.arraySize)
+            if (0 < m_ClipList.index && m_ClipList.index < m_ClipAnimations.arraySize)
             {
-                AnimationClipInfoProperties info = GetAnimationClipInfoAtIndex(selectedClipIndex);
+                AnimationClipInfoProperties info = ((ClipInformation)m_ClipList.list[m_ClipList.index]).property;
                 for (int i = 0; i < singleImporter.importedTakeInfos.Length; i++)
                 {
                     if (singleImporter.importedTakeInfos[i].name == info.takeName)
@@ -615,7 +628,6 @@ namespace UnityEditor
             }
 
             AddClip(singleImporter.importedTakeInfos[takeIndex]);
-            UpdateList();
             SelectClip(list.list.Count - 1);
         }
 
@@ -624,7 +636,6 @@ namespace UnityEditor
             TransferDefaultClipsToCustomClips();
 
             RemoveClip(list.index);
-            UpdateList();
             SelectClip(Mathf.Min(list.index, list.count - 1));
         }
 
@@ -637,14 +648,14 @@ namespace UnityEditor
 
         private void DrawClipElement(Rect rect, int index, bool selected, bool focused)
         {
-            AnimationClipInfoProperties info = m_ClipList.list[index] as AnimationClipInfoProperties;
+            ClipInformation info = (ClipInformation)m_ClipList.list[index];
             rect.xMax -= kFrameColumnWidth * 2;
             GUI.Label(rect, info.name, EditorStyles.label);
             rect.x = rect.xMax;
             rect.width = kFrameColumnWidth;
-            GUI.Label(rect, info.firstFrame.ToString("0.0", CultureInfo.InvariantCulture.NumberFormat), styles.numberStyle);
+            GUI.Label(rect, info.firstFrame, styles.numberStyle);
             rect.x = rect.xMax;
-            GUI.Label(rect, info.lastFrame.ToString("0.0", CultureInfo.InvariantCulture.NumberFormat), styles.numberStyle);
+            GUI.Label(rect, info.lastFrame, styles.numberStyle);
         }
 
         private void DrawClipHeader(Rect rect)
@@ -660,18 +671,6 @@ namespace UnityEditor
 
         void AnimationSplitTable()
         {
-            if (m_ClipList == null)
-            {
-                m_ClipList = new ReorderableList(new List<AnimationClipInfoProperties>(), typeof(string), false, true, true, true);
-                m_ClipList.onAddCallback = AddClipInList;
-                m_ClipList.onSelectCallback = SelectClipInList;
-                m_ClipList.onRemoveCallback = RemoveClipInList;
-                m_ClipList.drawElementCallback = DrawClipElement;
-                m_ClipList.drawHeaderCallback = DrawClipHeader;
-                m_ClipList.elementHeight = 16;
-                UpdateList();
-                m_ClipList.index = selectedClipIndex;
-            }
             m_ClipList.DoLayoutList();
 
             EditorGUI.BeginChangeCheck();
@@ -682,14 +681,14 @@ namespace UnityEditor
                 if (clip == null)
                     return;
 
-                if (m_AnimationClipEditor != null && selectedClipIndex != -1)
+                if (m_AnimationClipEditor != null)
                 {
                     GUILayout.Space(5);
 
                     AnimationClip actualClip = m_AnimationClipEditor.target as AnimationClip;
 
                     if (!actualClip.legacy)
-                        GetSelectedClipInfo().AssignToPreviewClip(actualClip);
+                        clip.AssignToPreviewClip(actualClip);
 
                     TakeInfo[] importedTakeInfos = singleImporter.importedTakeInfos;
                     string[] takeNames = new string[importedTakeInfos.Length];
@@ -728,7 +727,7 @@ namespace UnityEditor
                             clip.name = MakeUniqueClipName(takeNames[newTakeIndex]);
                             SetupTakeNameAndFrames(clip, importedTakeInfos[newTakeIndex]);
                             GUIUtility.keyboardControl = 0;
-                            SelectClip(selectedClipIndex);
+                            SelectClip(m_ClipList.index);
 
                             // actualClip has been changed by SelectClip
                             actualClip = m_AnimationClipEditor.target as AnimationClip;
@@ -737,17 +736,17 @@ namespace UnityEditor
 
                     m_AnimationClipEditor.OnInspectorGUI();
 
-                    AvatarMaskSettings(GetSelectedClipInfo());
+                    AvatarMaskSettings(clip);
 
                     if (!actualClip.legacy)
-                        GetSelectedClipInfo().ExtractFromPreviewClip(actualClip);
-                }
-            }
+                        clip.ExtractFromPreviewClip(actualClip);
 
-            if (EditorGUI.EndChangeCheck() || m_AnimationClipEditor.needsToGenerateClipInfo)
-            {
-                TransferDefaultClipsToCustomClips();
-                m_AnimationClipEditor.needsToGenerateClipInfo = false;
+                    if (EditorGUI.EndChangeCheck() || m_AnimationClipEditor.needsToGenerateClipInfo)
+                    {
+                        TransferDefaultClipsToCustomClips();
+                        m_AnimationClipEditor.needsToGenerateClipInfo = false;
+                    }
+                }
             }
         }
 
@@ -772,21 +771,13 @@ namespace UnityEditor
 
         public override void OnInteractivePreviewGUI(Rect r, GUIStyle background)
         {
-            if (m_AnimationClipEditor)
-                m_AnimationClipEditor.OnInteractivePreviewGUI(r, background);
-        }
-
-        AnimationClipInfoProperties GetAnimationClipInfoAtIndex(int index)
-        {
-            return new AnimationClipInfoProperties(m_ClipAnimations.GetArrayElementAtIndex(index));
+            m_AnimationClipEditor.OnInteractivePreviewGUI(r, background);
         }
 
         AnimationClipInfoProperties GetSelectedClipInfo()
         {
-            if (selectedClipIndex >= 0 && selectedClipIndex < m_ClipAnimations.arraySize)
-                return GetAnimationClipInfoAtIndex(selectedClipIndex);
-            else
-                return null;
+            //If it doesn't have a selected clip. return null - there is nothing to select!
+            return m_ClipList.index >= 0 && m_ClipList.index < m_ClipList.count ? ((ClipInformation)m_ClipList.list[m_ClipList.index]).property : null;
         }
 
         /// <summary>
@@ -834,7 +825,7 @@ namespace UnityEditor
             string[] allClipNames = new string[m_ClipAnimations.arraySize];
             for (int i = 0; i < m_ClipAnimations.arraySize; ++i)
             {
-                AnimationClipInfoProperties clip = GetAnimationClipInfoAtIndex(i);
+                AnimationClipInfoProperties clip = ((ClipInformation)m_ClipList.list[i]).property;
                 allClipNames[i] = clip.name;
             }
             Array.Sort(allClipNames, StringComparer.InvariantCulture);
@@ -869,6 +860,7 @@ namespace UnityEditor
                 SetupDefaultClips();
                 m_ImportAnimation.boolValue = false;
             }
+            UpdateList();
         }
 
         void SetupTakeNameAndFrames(AnimationClipInfoProperties info, TakeInfo takeInfo)
@@ -883,7 +875,8 @@ namespace UnityEditor
             string uniqueName = MakeUniqueClipName(takeInfo.defaultClipName);
 
             m_ClipAnimations.InsertArrayElementAtIndex(m_ClipAnimations.arraySize);
-            AnimationClipInfoProperties info = GetAnimationClipInfoAtIndex(m_ClipAnimations.arraySize - 1);
+            var property = m_ClipAnimations.GetArrayElementAtIndex(m_ClipAnimations.arraySize - 1);
+            AnimationClipInfoProperties info = new AnimationClipInfoProperties(property);
 
             info.name = uniqueName;
             SetupTakeNameAndFrames(info, takeInfo);
@@ -907,9 +900,9 @@ namespace UnityEditor
 
             SetBodyMaskDefaultValues(info);
 
-
             info.ClearEvents();
             info.ClearCurves();
+            UpdateList();
         }
 
         private AvatarMask m_Mask = null;
@@ -930,7 +923,14 @@ namespace UnityEditor
                 m_MaskFoldout = EditorGUILayout.Foldout(m_MaskFoldout, styles.Mask, true);
                 GUI.changed = wasChanged;
 
-                if (clipInfo.maskType == ClipAnimationMaskType.CreateFromThisModel && !m_MaskInspector.IsMaskUpToDate() && !m_MaskInspector.IsMaskEmpty())
+                var maskType = clipInfo.maskType;
+                bool upToDate = true;
+                if (maskType == ClipAnimationMaskType.CreateFromThisModel || maskType == ClipAnimationMaskType.CopyFromOther)
+                {
+                    upToDate = m_MaskInspector.IsMaskUpToDate();
+                }
+
+                if (maskType == ClipAnimationMaskType.CreateFromThisModel && !upToDate && !m_MaskInspector.IsMaskEmpty())
                 {
                     GUILayout.BeginHorizontal(EditorStyles.helpBox);
                     GUILayout.Label(styles.MaskHasAPath,
@@ -947,7 +947,7 @@ namespace UnityEditor
                     GUILayout.EndVertical();
                     GUILayout.EndHorizontal();
                 }
-                else if (clipInfo.maskType == ClipAnimationMaskType.CopyFromOther && clipInfo.MaskNeedsUpdating())
+                else if (maskType == ClipAnimationMaskType.CopyFromOther && clipInfo.MaskNeedsUpdating())
                 {
                     GUILayout.BeginHorizontal(EditorStyles.helpBox);
                     GUILayout.Label(styles.SourceMaskHasChanged,
@@ -962,7 +962,7 @@ namespace UnityEditor
                     GUILayout.EndVertical();
                     GUILayout.EndHorizontal();
                 }
-                else if (clipInfo.maskType == ClipAnimationMaskType.CopyFromOther && !m_MaskInspector.IsMaskUpToDate())
+                else if (maskType == ClipAnimationMaskType.CopyFromOther && !upToDate)
                 {
                     GUILayout.BeginHorizontal(EditorStyles.helpBox);
                     GUILayout.Label(styles.SourceMaskHasAPath,
@@ -1017,6 +1017,47 @@ namespace UnityEditor
                 bodyMask.InsertArrayElementAtIndex(i);
                 bodyMask.GetArrayElementAtIndex(i).intValue = 1;
             }
+        }
+
+        void RegisterListeners()
+        {
+            //Ensures that the ClipList and the Serialized copy of the clip remain in sync when an Undo/Redo is performed.
+            if (!serializedObject.isEditingMultipleObjects)
+                Undo.undoRedoPerformed += HandleUndo;
+        }
+
+        void UnregisterListeners()
+        {
+            //Ensures that the ClipList and the Serialized copy of the clip remain in sync when an Undo/Redo is performed.
+            if (!serializedObject.isEditingMultipleObjects)
+                Undo.undoRedoPerformed -= HandleUndo;
+        }
+
+        void HandleUndo()
+        {
+            //Update animations serialization in-case something has changed
+            m_ClipAnimations.serializedObject.UpdateIfRequiredOrScript();
+
+            //Reset the cache to the serialized values
+            DeserializeClips();
+        }
+
+        void DeserializeClips()
+        {
+            //Clear the clip editors
+            DestroyEditorsAndData();
+
+            //Reload the clips
+            m_ClipAnimations = serializedObject.FindProperty("m_ClipAnimations");
+            m_AnimationType = serializedObject.FindProperty("m_AnimationType");
+            m_DefaultClipsSerializedObject = null;
+            if (m_ClipAnimations.arraySize == 0)
+                SetupDefaultClips();
+            UpdateList();
+
+            //Set the active clip within a valid range, -1 ONLY if there are no possible clips to select.
+            int selectedClip = m_ClipList.count > 0 ? Mathf.Clamp(m_ClipList.index, 0, m_ClipList.count) : -1;
+            SelectClip(selectedClip);
         }
     }
 }

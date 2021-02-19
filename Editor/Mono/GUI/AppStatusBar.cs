@@ -4,6 +4,7 @@
 
 using System;
 using System.Globalization;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.Scripting;
 
@@ -13,29 +14,15 @@ namespace UnityEditor
     {
         static readonly NumberFormatInfo percentageFormat = new CultureInfo("en-US", false).NumberFormat;
 
-        static class Styles
+        internal static class Styles
         {
             public const int spacing = 4;
 
-            public static readonly GUILayoutOption statusRightReservedSpace = GUILayout.Width(280);
             public static readonly GUILayoutOption progressBarWidth = GUILayout.Width(180);
             public static readonly GUILayoutOption progressLabelMaxWidth = GUILayout.MaxWidth(230);
             public static readonly GUIStyle background = "AppToolbar";
             public static readonly GUIStyle statusLabel = EditorStyles.FromUSS(EditorStyles.label, "status-bar-label");
-            public static readonly GUIStyle statusIcon = new GUIStyle()
-            {
-                name = "status-bar-icon",
-                imagePosition = ImagePosition.ImageOnly,
-                alignment = TextAnchor.MiddleLeft,
-                fixedWidth = 18,
-                fixedHeight = 18,
-                contentOffset = new Vector2(-4, 0),
-                padding = new RectOffset(0, 0, 0, 0),
-                margin = new RectOffset(0, 0, 0, 0),
-                richText = false,
-                stretchHeight = false,
-                stretchWidth = false
-            };
+            public static readonly GUIStyle statusIcon = "StatusBarIcon";
 
             public static readonly GUIStyle progressBar = EditorStyles.FromUSS(EditorStyles.progressBarBar, "status-bar-progress");
             public static readonly GUIStyle progressBarAlmostDone = EditorStyles.FromUSS(progressBar, "status-bar-progress-almost-done");
@@ -46,7 +33,10 @@ namespace UnityEditor
 
             public static readonly GUIContent[] statusWheel;
             public static readonly GUIContent assemblyLock = EditorGUIUtility.IconContent("AssemblyLock", "|Assemblies are currently locked. Compilation will resume once they are unlocked");
-            public static readonly GUIContent progressIcon = EditorGUIUtility.IconContent("Progress", "Open progress details...");
+            public static readonly GUIContent progressIcon = EditorGUIUtility.TrIconContent("Progress", "Show progress details");
+            public static readonly GUIContent progressHideIcon = EditorGUIUtility.TrIconContent("Progress", "Hide progress details");
+            public static readonly GUIContent autoGenerateLightOn = EditorGUIUtility.TrIconContent("AutoLightbakingOn", "Auto Generate Lighting On");
+            public static readonly GUIContent autoGenerateLightOff = EditorGUIUtility.TrIconContent("AutoLightbakingOff", "Auto Generate Lighting Off");
 
             static Styles()
             {
@@ -60,14 +50,14 @@ namespace UnityEditor
         private static AppStatusBar s_AppStatusBar;
 
         private string m_MiniMemoryOverview = "";
-        private GUIContent m_BakeModeContent = new GUIContent();
+        private bool? m_autoLightBakingOn;
+        private bool m_DrawExtraFeatures;
         private GUIContent m_ProgressStatus = new GUIContent();
         private GUIContent m_ProgressPercentageStatus = new GUIContent();
         private bool m_CurrentProgressNotResponding = false;
-        private int m_LastProgressId = -1;
-        private float m_LastElapsedTime = 0f;
 
         private ManagedDebuggerToggle m_ManagedDebuggerToggle = null;
+        private CacheServerToggle m_CacheServerToggle = null;
 
         private bool showBakeMode
         {
@@ -82,7 +72,7 @@ namespace UnityEditor
         {
             get
             {
-                return Progress.IsRunning && m_LastElapsedTime > 1.5f;
+                return Progress.running;
             }
         }
 
@@ -90,30 +80,34 @@ namespace UnityEditor
         {
             base.OnEnable();
             s_AppStatusBar = this;
+            m_autoLightBakingOn = GetBakeMode();
             m_ManagedDebuggerToggle = new ManagedDebuggerToggle();
+            m_CacheServerToggle = new CacheServerToggle();
+            m_EventInterests.wantsLessLayoutEvents = true;
+            m_DrawExtraFeatures = ModeService.HasCapability(ModeCapability.StatusBarExtraFeatures, true);
 
-            Progress.OnAdded += RefreshProgressBar;
-            Progress.OnRemoved += RefreshProgressBar;
-            Progress.OnUpdated += RefreshProgressBar;
+            Progress.added += RefreshProgressBar;
+            Progress.removed += RefreshProgressBar;
+            Progress.updated += RefreshProgressBar;
         }
 
         protected override void OnDisable()
         {
-            Progress.OnAdded -= RefreshProgressBar;
-            Progress.OnRemoved -= RefreshProgressBar;
-            Progress.OnUpdated -= RefreshProgressBar;
+            Progress.added -= RefreshProgressBar;
+            Progress.removed -= RefreshProgressBar;
+            Progress.updated -= RefreshProgressBar;
             base.OnDisable();
         }
 
         protected void OnInspectorUpdate()
         {
             string miniOverview = UnityEditorInternal.ProfilerDriver.miniMemoryOverview;
-            string bakeModeString = GetBakeModeString();
+            bool? autoLightBakingOn = GetBakeMode();
 
-            if ((Unsupported.IsDeveloperMode() && m_MiniMemoryOverview != miniOverview) || (m_BakeModeContent.text != bakeModeString))
+            if ((Unsupported.IsDeveloperMode() && m_MiniMemoryOverview != miniOverview) || (m_autoLightBakingOn != autoLightBakingOn))
             {
                 m_MiniMemoryOverview = miniOverview;
-                m_BakeModeContent = new GUIContent(bakeModeString);
+                m_autoLightBakingOn = autoLightBakingOn;
 
                 Repaint();
             }
@@ -121,23 +115,29 @@ namespace UnityEditor
 
         private void DelayCheckProgressUnresponsive()
         {
-            EditorApplication.delayCall -= CheckProgressUnresponsive;
-            EditorApplication.delayCall += CheckProgressUnresponsive;
+            EditorApplication.update -= CheckProgressUnresponsive;
+            EditorApplication.CallDelayed(CheckProgressUnresponsive, 0.250);
         }
 
         private void CheckProgressUnresponsive()
         {
-            if (Progress.IsRunning)
+            if (Progress.running)
             {
-                var progressItem = Progress.GetProgressById(m_LastProgressId);
-                if (progressItem != null && !progressItem.responding)
-                    RefreshProgressBar(new[] {progressItem});
-
-                DelayCheckProgressUnresponsive();
+                var unresponsiveItem = Progress.EnumerateItems().FirstOrDefault(item => !item.responding);
+                if (unresponsiveItem != null)
+                {
+                    m_CurrentProgressNotResponding = true;
+                    RefreshProgressBar(new[] { unresponsiveItem });
+                }
+                else
+                {
+                    m_CurrentProgressNotResponding = false;
+                    DelayCheckProgressUnresponsive();
+                }
             }
             else
             {
-                m_LastProgressId = -1;
+                m_CurrentProgressNotResponding = false;
             }
         }
 
@@ -155,9 +155,15 @@ namespace UnityEditor
                 GUILayout.Space(2);
                 DrawStatusText();
                 GUILayout.FlexibleSpace();
-                DrawBakeMode();
+                if (m_DrawExtraFeatures)
+                    DrawSpecialModeLabel();
                 DrawProgressBar();
-                DrawDebuggerToggle();
+                if (m_DrawExtraFeatures)
+                {
+                    DrawDebuggerToggle();
+                    DrawCacheServerToggle();
+                    DrawBakeMode();
+                }
                 DrawRefreshStatus();
             }
             GUILayout.EndHorizontal();
@@ -185,69 +191,75 @@ namespace UnityEditor
             }
             else
             {
-                if (GUILayout.Button(Styles.progressIcon, Styles.statusIcon))
-                    Progress.ShowDetails();
+                var canHide = EditorUIService.instance.ProgressWindowCanHideDetails();
+                if (GUILayout.Button(canHide ? Styles.progressHideIcon : Styles.progressIcon, Styles.statusIcon))
+                {
+                    if (canHide)
+                        EditorUIService.instance.ProgressWindowHideDetails();
+                    else
+                        Progress.ShowDetails();
+                }
 
                 var buttonRect = GUILayoutUtility.GetLastRect();
                 EditorGUIUtility.AddCursorRect(buttonRect, MouseCursor.Link);
             }
+        }
 
-            GUILayout.Space(Styles.spacing);
-
+        private string m_SpecialModeLabel = "";
+        private void DrawSpecialModeLabel()
+        {
             if (Unsupported.IsBleedingEdgeBuild())
             {
+                GUILayout.Space(k_SpaceBeforeProgress);
+                m_SpecialModeLabel = "THIS IS AN UNTESTED BLEEDINGEDGE UNITY BUILD";
                 var backup = GUI.color;
                 GUI.color = Color.yellow;
-                GUILayout.Label("THIS IS AN UNTESTED BLEEDINGEDGE UNITY BUILD");
+                GUILayout.Label(m_SpecialModeLabel);
                 GUI.color = backup;
             }
             else if (Unsupported.IsDeveloperMode())
             {
-                GUILayout.Label(m_MiniMemoryOverview, Styles.statusLabel);
+                GUILayout.Space(k_SpaceBeforeProgress);
+                m_SpecialModeLabel = m_MiniMemoryOverview;
+                GUILayout.Label(m_SpecialModeLabel, Styles.statusLabel);
                 EditorGUIUtility.CleanCache(m_MiniMemoryOverview);
             }
+            else
+                m_SpecialModeLabel = "";
         }
 
+        float k_SpaceBeforeProgress = 15;
+        float k_SpaceAfterProgress = 4;
         private void DrawProgressBar()
         {
             if (!showProgress)
                 return;
 
-            GUILayout.Space(15);
-            if (GUILayout.Button(m_ProgressStatus, Styles.statusLabel))
-                Progress.ShowDetails();
+            GUILayout.Space(k_SpaceBeforeProgress);
 
             var buttonRect = GUILayoutUtility.GetLastRect();
             EditorGUIUtility.AddCursorRect(buttonRect, MouseCursor.Link);
 
             // Define the progress styles to be used based on the current progress state.
-            Color oldColor  = GUI.color;
-            if (m_CurrentProgressNotResponding)
-            {
-                var fade = Mathf.Min(Mathf.Max(0.25f, Mathf.Cos((float)EditorApplication.timeSinceStartup * 2.0f) / 2.0f + 0.75f), 0.85f);
-                GUI.color = new Color(fade, fade, fade);
-            }
-            var globalProgress = Progress.GlobalProgress;
+            var globalProgress = Progress.globalProgress;
             var progressBarStyle = GetProgressBarStyle(globalProgress);
-            var progressBarContent = GetProgressBarContent(globalProgress, m_ProgressPercentageStatus);
+            var progressBarContent = GetProgressBarContent(m_ProgressStatus);
             var progressRect = EditorGUILayout.GetControlRect(false, position.height, Styles.progressBarBack, Styles.progressBarWidth);
             if (EditorGUI.ProgressBar(progressRect, globalProgress, progressBarContent, true,
                 Styles.progressBarBack, progressBarStyle, Styles.progressBarText))
                 Progress.ShowDetails();
 
-            GUI.color = oldColor;
-
             if (globalProgress == -1.0f)
                 EditorApplication.delayCall += () => Repaint();
 
             EditorGUIUtility.AddCursorRect(progressRect, MouseCursor.Link);
-            GUILayout.Space(4);
+            GUILayout.Space(k_SpaceAfterProgress);
         }
 
-        private GUIContent GetProgressBarContent(float globalProgress, GUIContent defaultContent)
+        private GUIContent GetProgressBarContent(GUIContent defaultContent)
         {
             GUIContent progressBarContent = defaultContent;
-            if (m_CurrentProgressNotResponding || globalProgress < 0.15f)
+            if (m_CurrentProgressNotResponding)
                 progressBarContent = GUIContent.none;
 
             return progressBarContent;
@@ -272,7 +284,7 @@ namespace UnityEditor
             if (!showBakeMode)
                 return;
 
-            if (GUILayout.Button(m_BakeModeContent, Styles.statusLabel))
+            if (GUILayout.Button(GetBakeModeIcon(m_autoLightBakingOn), Styles.statusIcon))
             {
                 Event.current.Use();
                 LightingWindow.CreateLightingWindow();
@@ -282,10 +294,14 @@ namespace UnityEditor
             EditorGUIUtility.AddCursorRect(buttonRect, MouseCursor.Link);
         }
 
-        private void DrawDebuggerToggle()
+        void DrawDebuggerToggle()
         {
-            var rect = EditorGUILayout.GetControlRect(GUILayout.Width(m_ManagedDebuggerToggle.GetWidth()));
-            m_ManagedDebuggerToggle.OnGUI(rect.x, 0);
+            m_ManagedDebuggerToggle.OnGUI();
+        }
+
+        void DrawCacheServerToggle()
+        {
+            m_CacheServerToggle.OnGUI();
         }
 
         private void DrawStatusText()
@@ -306,7 +322,7 @@ namespace UnityEditor
             GUILayout.BeginVertical();
             GUILayout.Space(1);
 
-            GUILayout.Label(statusText, errorStyle, GetStatusTextLayoutOption(m_ProgressStatus));
+            GUILayout.Label(statusText, errorStyle, GetStatusTextLayoutOption((icon != null ? icon.width : 0) + 6));
 
             // Handle status bar click
             if (Event.current.type == EventType.MouseDown)
@@ -323,14 +339,11 @@ namespace UnityEditor
             GUILayout.EndVertical();
         }
 
-        private void RefreshProgressBar(ProgressItem[] progressItems)
+        private void RefreshProgressBar(Progress.Item[] progressItems)
         {
             var taskCount = Progress.GetRunningProgressCount();
             if (taskCount == 0)
             {
-                m_LastProgressId = -1;
-                m_LastElapsedTime = 0f;
-                m_CurrentProgressNotResponding = false;
                 m_ProgressStatus.text = String.Empty;
                 m_ProgressPercentageStatus.text = String.Empty;
             }
@@ -339,81 +352,76 @@ namespace UnityEditor
                 var currentItem = progressItems[0];
                 if (!String.IsNullOrEmpty(currentItem.description))
                     m_ProgressStatus.tooltip = currentItem.name + "\r\n" + currentItem.description;
-                m_ProgressPercentageStatus.text = Progress.GlobalProgress.ToString("P", percentageFormat);
+                m_ProgressPercentageStatus.text = Progress.globalProgress.ToString("P", percentageFormat);
+
+                var remainingTimeText = "";
+                if (progressItems.Any(item => item.timeDisplayMode == Progress.TimeDisplayMode.ShowRemainingTime) &&
+                    progressItems.All(item => !item.indefinite) && Progress.globalRemainingTime.TotalSeconds > 0)
+                {
+                    remainingTimeText = $" [{Progress.globalRemainingTime:g}]";
+                }
 
                 if (taskCount > 1)
-                {
-                    m_ProgressStatus.text = $"Multiple tasks ({taskCount})";
-                }
+                    m_ProgressStatus.text = $"Multiple tasks ({taskCount}){remainingTimeText}";
                 else
-                    m_ProgressStatus.text = currentItem.name;
+                    m_ProgressStatus.text = $"{currentItem.name}{remainingTimeText}";
 
-
-                m_LastProgressId = currentItem.id;
-                m_CurrentProgressNotResponding = true;
-                for (int i = 0; i < progressItems.Length; ++i)
-                {
-                    if (!progressItems[i].responding)
-                    {
-                        m_LastProgressId = progressItems[i].id;
-                        continue;
-                    }
-                    m_CurrentProgressNotResponding = false;
-                    break;
-                }
-
-                m_LastElapsedTime = Mathf.Max(m_LastElapsedTime, currentItem.elapsedTime);
-                if (m_CurrentProgressNotResponding)
-                    m_LastElapsedTime = float.MaxValue;
+                DelayCheckProgressUnresponsive();
             }
+
             RepaintProgress(progressItems);
         }
 
-        private void RepaintProgress(ProgressItem[] progressItems)
+        private void RepaintProgress(Progress.Item[] progressItems)
         {
             bool hasSynchronous = false;
-            bool hasIndefinite = false;
             foreach (var item in progressItems)
             {
-                if ((item.options & ProgressOptions.Synchronous) == ProgressOptions.Synchronous)
+                if ((item.options & Progress.Options.Synchronous) == Progress.Options.Synchronous)
                 {
                     hasSynchronous = true;
                     break;
                 }
-                if (item.indefinite)
-                    hasIndefinite = true;
             }
+
             if (hasSynchronous)
-            {
                 RepaintImmediately();
-            }
-            else if (hasIndefinite)
-            {
-                Repaint();
-            }
             else
-            {
                 Repaint();
-                DelayCheckProgressUnresponsive();
-            }
         }
 
-        private GUILayoutOption GetStatusTextLayoutOption(GUIContent progressContent)
+        private GUILayoutOption GetStatusTextLayoutOption(float consoleIconWidth)
         {
-            float statusRightReservedSpace = (float)Styles.statusRightReservedSpace.value;
+            int iconWidth = 25;
+            float specialModeLabelWidth = Styles.statusLabel.CalcSize(new GUIContent(m_SpecialModeLabel)).x + k_SpaceBeforeProgress + 8;
+            float statusRightReservedSpace =
+                specialModeLabelWidth +
+                iconWidth + // script debugger
+                iconWidth + // cache server
+                (showBakeMode ? iconWidth : 0) + // bake
+                iconWidth; // progress
             if (!showProgress)
-                return GUILayout.MaxWidth(position.width - statusRightReservedSpace);
+                return GUILayout.MaxWidth(position.width - statusRightReservedSpace - consoleIconWidth);
 
-            var progressStatusContentWidth = Styles.statusLabel.CalcSize(progressContent).x;
-            return GUILayout.MaxWidth(position.width - statusRightReservedSpace - progressStatusContentWidth - (float)Styles.progressBarWidth.value);
+            return GUILayout.MaxWidth(position.width - statusRightReservedSpace - k_SpaceBeforeProgress - 8 - (float)Styles.progressBarWidth.value - k_SpaceAfterProgress - consoleIconWidth);
         }
 
-        private string GetBakeModeString()
+        private GUIContent GetBakeModeIcon(bool? bakeMode)
+        {
+            if (!bakeMode.HasValue)
+                return new GUIContent();
+            else if (bakeMode.Value)
+                return Styles.autoGenerateLightOn;
+            else
+                return Styles.autoGenerateLightOff;
+        }
+
+        private bool? GetBakeMode()
         {
             if (!showBakeMode)
-                return "";
+                return null;
 
-            return "Auto Generate Lighting " + (Lightmapping.GetLightingSettingsOrDefaultsFallback().autoGenerate ? "On" : "Off");
+            return Lightmapping.GetLightingSettingsOrDefaultsFallback().autoGenerate;
         }
 
         [RequiredByNativeCode]

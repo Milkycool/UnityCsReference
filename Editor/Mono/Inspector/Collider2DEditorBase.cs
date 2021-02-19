@@ -139,9 +139,6 @@ namespace UnityEditor
                     EditorGUI.EndDisabledGroup();
 
                     ShowContacts(collider);
-
-                    // We need to repaint as some of the above properties can change without causing a repaint.
-                    Repaint();
                 }
                 else
                 {
@@ -163,7 +160,7 @@ namespace UnityEditor
         void ShowContacts(Collider2D collider)
         {
             EditorGUI.indentLevel++;
-            m_ShowContacts.target = EditorGUILayout.Foldout(m_ShowContacts.target, "Contacts");
+            m_ShowContacts.target = EditorGUILayout.Foldout(m_ShowContacts.target, "Contacts", true);
             if (EditorGUILayout.BeginFadeGroup(m_ShowContacts.faded))
             {
                 var contactCount = collider.GetContacts(m_Contacts);

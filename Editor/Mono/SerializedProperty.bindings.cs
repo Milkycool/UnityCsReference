@@ -179,7 +179,7 @@ namespace UnityEditor
             {
                 string[] names = enumDisplayNames;
                 var res = new string[names.Length];
-                using (new UnityEditor.Localization.Editor.LocalizationGroup(m_SerializedObject.targetObject))
+                using (new LocalizationGroup(m_SerializedObject.targetObject))
                 {
                     for (var i = 0; i < res.Length; ++i)
                     {
@@ -492,42 +492,17 @@ namespace UnityEditor
         [NativeName("GetPropertyPath")]
         private extern string GetPropertyPathInternal();
 
-        /// <summary>
-        /// This is a more generic and less specialized form as the one below
-        /// 'hashCodeForPropertyPathWithoutArrayIndex' that assumes that
-        /// we dont have managed references.
-        /// </summary>
-        internal int hashCodeForPropertyPath
-        {
-            get
-            {
-                Verify();
-
-                // For managed references we cannot ignore the array index since
-                // instances might change from index to index.
-                if (propertyType == SerializedPropertyType.ManagedReference)
-                {
-                    return GetHashCodeForPropertyPathInternal();
-                }
-
-                return hashCodeForPropertyPathWithoutArrayIndex;
-            }
-        }
-
         internal int hashCodeForPropertyPathWithoutArrayIndex
         {
             get
             {
                 Verify();
-                return GetHasCodeForPropertyPathWithoutArrayIndexInternal();
+                return GetHashCodeForPropertyPathWithoutArrayIndexInternal();
             }
         }
 
-        [NativeName("GetHasCodeForPropertyPathWithoutArrayIndex")]
-        private extern int GetHasCodeForPropertyPathWithoutArrayIndexInternal();
-
-        [NativeName("GetHashCodeForPropertyPath")]
-        private extern int GetHashCodeForPropertyPathInternal();
+        [NativeName("GetHashCodeForPropertyPathWithoutArrayIndex")]
+        private extern int GetHashCodeForPropertyPathWithoutArrayIndexInternal();
 
         // Is this property editable? (RO)
         public bool editable
@@ -541,6 +516,9 @@ namespace UnityEditor
 
         [NativeName("GetEditable")]
         private extern bool GetEditableInternal();
+
+        [NativeName("IsReorderable")]
+        internal extern bool IsReorderable();
 
         // Is this property animated? (RO)
         public bool isAnimated
@@ -946,10 +924,19 @@ namespace UnityEditor
                 var fieldInfo = UnityEditor.ScriptAttributeUtility.GetFieldInfoAndStaticTypeFromProperty(this, out type);
                 var propertyBaseType = type;
 
-                if (value != null  && !propertyBaseType.IsAssignableFrom(value.GetType()))
+                if (value != null)
                 {
-                    throw new System.InvalidOperationException(
-                        $"Cannot assign an object of type '{value.GetType().Name}' to a managed reference with a base type of '{propertyBaseType.Name}': types are not compatible");
+                    var valueType = value.GetType();
+                    if (valueType == typeof(UnityObject) || valueType.IsSubclassOf(typeof(UnityObject)))
+                    {
+                        throw new System.InvalidOperationException(
+                            $"Cannot assign an object deriving from UnityEngine.Object to a managed reference. This is not supported.");
+                    }
+                    else if (!propertyBaseType.IsAssignableFrom(valueType))
+                    {
+                        throw new System.InvalidOperationException(
+                            $"Cannot assign an object of type '{valueType.Name}' to a managed reference with a base type of '{propertyBaseType.Name}': types are not compatible");
+                    }
                 }
 
                 Verify(VerifyFlags.IteratorNotAtEnd);

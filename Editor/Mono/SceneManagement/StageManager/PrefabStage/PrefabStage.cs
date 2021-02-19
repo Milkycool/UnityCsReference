@@ -10,7 +10,6 @@ using System.Linq;
 using UnityEditor.Callbacks;
 using UnityEditor.IMGUI.Controls;
 using UnityEditor.SceneManagement;
-using UnityEditor.VersionControl;
 using UnityEngine;
 using UnityEngine.Assertions;
 using UnityEngine.SceneManagement;
@@ -41,6 +40,7 @@ namespace UnityEditor.Experimental.SceneManagement
             public static GUIContent contextLabel = EditorGUIUtility.TrTextContent("Context:");
             public static GUIContent[] contextRenderModeTexts = new[] { EditorGUIUtility.TrTextContent("Normal"), EditorGUIUtility.TrTextContent("Gray"), EditorGUIUtility.TrTextContent("Hidden") };
             public static StageUtility.ContextRenderMode[] contextRenderModeOptions = new[] { StageUtility.ContextRenderMode.Normal, StageUtility.ContextRenderMode.GreyedOut, StageUtility.ContextRenderMode.Hidden };
+            public static GUIContent showOverridesLabel = EditorGUIUtility.TrTextContent("Show Overrides", "Visualize overrides from the Prefab instance on the Prefab Asset. Overrides on the root Transform are always visualized.");
 
             static Styles()
             {
@@ -73,6 +73,7 @@ namespace UnityEditor.Experimental.SceneManagement
         string m_PrefabAssetPath;
         GameObject m_OpenedFromInstanceRoot;
         GameObject m_OpenedFromInstanceObject;
+        ulong m_FileIdForOpenedFromInstanceObject;
         Stage m_ContextStage = null;
         Mode m_Mode;
         int m_InitialSceneDirtyID;
@@ -89,6 +90,9 @@ namespace UnityEditor.Experimental.SceneManagement
         Transform m_LastRootTransform;
         const float kDurationBeforeShowingSavingBadge = 1.0f;
         static ExposablePopupMenu s_ContextRenderModeSelector;
+        Hash128 m_LastPrefabSourceFileHash;
+        bool m_NeedsReloadingWhenReturningToStage;
+        bool m_IsAssetMissing;
 
         [System.Serializable]
         struct PatchedProperty
@@ -115,21 +119,61 @@ namespace UnityEditor.Experimental.SceneManagement
         {
         }
 
-        void Init(string prefabAssetPath, GameObject openedFromInstanceObject, PrefabStage.Mode prefabStageMode, Stage contextStage)
+        void SetOpenedFromInstanceObject(GameObject go)
+        {
+            if (go != null)
+            {
+                if (!PrefabUtility.IsPartOfPrefabInstance(go))
+                    throw new ArgumentException("GameObject must be part of a Prefab instance, or null.", nameof(go));
+
+                m_OpenedFromInstanceObject = go;
+                m_OpenedFromInstanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(go);
+                m_FileIdForOpenedFromInstanceObject = Unsupported.GetOrGenerateFileIDHint(go);
+            }
+            else
+            {
+                m_OpenedFromInstanceObject = null;
+                m_OpenedFromInstanceRoot = null;
+                m_FileIdForOpenedFromInstanceObject = 0;
+            }
+        }
+
+        void Init(string prefabAssetPath, GameObject openedFromInstanceGameObject, PrefabStage.Mode prefabStageMode, Stage contextStage)
         {
             m_PrefabAssetPath = prefabAssetPath;
             CachePrefabFolderInfo();
+            SetOpenedFromInstanceObject(openedFromInstanceGameObject);
 
-            m_OpenedFromInstanceObject = openedFromInstanceObject;
-            if (openedFromInstanceObject != null)
-            {
-                if (!PrefabUtility.IsPartOfPrefabInstance(openedFromInstanceObject))
-                    throw new ArgumentException("GameObject must be part of a Prefab instance, or null.", nameof(openedFromInstanceObject));
-                m_OpenedFromInstanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(openedFromInstanceObject);
-            }
             if (prefabStageMode == PrefabStage.Mode.InContext)
                 m_ContextStage = contextStage;
             m_Mode = prefabStageMode;
+        }
+
+        void ReconstructDataIfNeeded()
+        {
+            bool needsReconstruction = m_OpenedFromInstanceObject == null && m_FileIdForOpenedFromInstanceObject != 0;
+            if (!needsReconstruction)
+                return;
+
+            // The previous PrefabStage can have been reloaded which means we need to update our reference to m_OpenedFromInstanceObject
+            // to the newly loaded GameObject (the old GameObject was deleted as part of reloading the PrefabStage).
+            var history = StageNavigationManager.instance.stageHistory;
+            int index = history.IndexOf(this);
+            int previousIndex = index - 1;
+            var previousStage = history[previousIndex];
+            var prevPrefabStage = previousStage as PrefabStage;
+            if (prevPrefabStage)
+            {
+                var go = PrefabStageUtility.FindFirstGameObjectThatMatchesFileID(prevPrefabStage.prefabContentsRoot.transform, m_FileIdForOpenedFromInstanceObject, true);
+                if (go != null)
+                {
+                    SetOpenedFromInstanceObject(go);
+                }
+                else
+                {
+                    Debug.LogError("Could not find GameObject with fileID " + m_FileIdForOpenedFromInstanceObject + " in PrefabStage for: " + prevPrefabStage.assetPath);
+                }
+            }
         }
 
         internal bool analyticsDidUserModify { get { return m_AnalyticsDidUserModify; } }
@@ -192,6 +236,11 @@ namespace UnityEditor.Experimental.SceneManagement
         public Mode mode
         {
             get { return m_Mode; }
+        }
+
+        bool isCurrentStage
+        {
+            get { return StageUtility.GetCurrentStage() == this; }
         }
 
         public override ulong GetCombinedSceneCullingMaskForCamera()
@@ -295,7 +344,7 @@ namespace UnityEditor.Experimental.SceneManagement
 
         internal bool temporarilyDisableAutoSave
         {
-            get { return m_TemporarilyDisableAutoSave; }
+            get { return m_TemporarilyDisableAutoSave || isAssetMissing; }
         }
 
         internal override bool isValid
@@ -305,7 +354,7 @@ namespace UnityEditor.Experimental.SceneManagement
 
         internal override bool isAssetMissing
         {
-            get { return !File.Exists(m_PrefabAssetPath); }
+            get { return m_IsAssetMissing; }
         }
 
         void OnPrefabInstanceUpdated(GameObject instance)
@@ -334,6 +383,8 @@ namespace UnityEditor.Experimental.SceneManagement
 
         bool LoadStage()
         {
+            ReconstructDataIfNeeded();
+
             string prefabPath = m_PrefabAssetPath;
             GameObject openedFromInstanceObject = m_OpenedFromInstanceObject;
             Mode prefabStageMode = m_Mode;
@@ -393,7 +444,7 @@ namespace UnityEditor.Experimental.SceneManagement
                     if (instanceParent != null)
                     {
                         // Insert dummy parent which ensure Prefab contents is aligned same as Prefab instance.
-                        GameObject dummyParent = new GameObject("Prefab Mode in Context");
+                        GameObject dummyParent = new GameObject(PrefabUtility.kDummyPrefabStageRootObjectName);
                         EditorSceneManager.MoveGameObjectToScene(dummyParent, scene);
                         dummyParent.transform.SetParent(m_PrefabContentsRoot.transform.parent, false);
 
@@ -433,6 +484,12 @@ namespace UnityEditor.Experimental.SceneManagement
         // Returns true if opened successfully
         protected internal override bool OnOpenStage()
         {
+            if (!isCurrentStage)
+            {
+                Debug.LogError("Only opening the current PrefabStage is supported. Please report a bug");
+                return false;
+            }
+
             if (LoadStage())
             {
                 if (mode == Mode.InContext)
@@ -447,6 +504,7 @@ namespace UnityEditor.Experimental.SceneManagement
                 // Note: The user can have reparented and created new GameObjects in the environment scene during this callback.
                 EnsureParentOfPrefabRootIsUnpacked();
                 UpdateEnvironmentHideFlags();
+                UpdateLastPrefabSourceFileHashIfNeeded();
 
                 var sceneHierarchyWindows = SceneHierarchyWindow.GetAllSceneHierarchyWindows();
                 foreach (SceneHierarchyWindow sceneHierarchyWindow in sceneHierarchyWindows)
@@ -463,6 +521,25 @@ namespace UnityEditor.Experimental.SceneManagement
                 prefabStageClosing?.Invoke(this);
 
             Cleanup();
+        }
+
+        protected internal override void OnReturnToStage()
+        {
+            if (m_NeedsReloadingWhenReturningToStage)
+            {
+                m_NeedsReloadingWhenReturningToStage = false;
+
+                if (m_Mode == Mode.InContext && m_OpenedFromInstanceObject == null)
+                {
+                    // By clearing the contents root this stage becomes invalid which
+                    // will be handled the StageNavigationManager by returning to the
+                    // main stage
+                    m_PrefabContentsRoot = null;
+                    return;
+                }
+
+                ReloadStage();
+            }
         }
 
         bool HasPatchedPropertyModificationsFor(UnityEngine.Object obj, string partialPropertyName)
@@ -492,6 +569,13 @@ namespace UnityEditor.Experimental.SceneManagement
         void RecordPatchedPropertiesForContent()
         {
             m_PatchedProperties = new List<PatchedProperty>();
+
+            if (openedFromInstanceRoot == null)
+                return;
+
+            if (PrefabUtility.GetPrefabInstanceStatus(openedFromInstanceRoot) != PrefabInstanceStatus.Connected)
+                return;
+
             Dictionary<ulong, UnityEngine.Object> contentObjectsFromFileID = new Dictionary<ulong, UnityEngine.Object>();
             Dictionary<ulong, Transform> instanceTransformsFromFileID = new Dictionary<ulong, Transform>();
 
@@ -532,9 +616,7 @@ namespace UnityEditor.Experimental.SceneManagement
                 prefabObject = PrefabUtility.GetCorrespondingObjectFromSource(prefabObject);
             }
 
-            var patchOverridenPropertiesState = PrefabSettingsProvider.GetPatchOverridenPropertiesState();
-            bool onlyCheckTransforms = patchOverridenPropertiesState == PrefabSettingsProvider.PatchOverridenProperties.AllTransforms ||
-                patchOverridenPropertiesState == PrefabSettingsProvider.PatchOverridenProperties.RootTransformOnly;
+            bool onlyPatchRootTransform = !s_PatchAllOverriddenProperties.value;
 
             // Run through same objects, but from innermost out so outer overrides are applied last.
             for (int i = instanceAndCorrespondingObjectChain.Count - 1; i >= 0; i--)
@@ -549,7 +631,7 @@ namespace UnityEditor.Experimental.SceneManagement
                     if (mod.target == null)
                         continue;
 
-                    if (onlyCheckTransforms && !(mod.target is Transform))
+                    if (onlyPatchRootTransform && !(mod.target is Transform))
                         continue;
 
                     UnityEngine.Object targetInContent = null;
@@ -587,8 +669,7 @@ namespace UnityEditor.Experimental.SceneManagement
                         if (targetInContent == prefabContentsRoot && mod.propertyPath == "m_Name")
                             continue;
 
-                        bool wantRootTransformOverridesOnly = patchOverridenPropertiesState == PrefabSettingsProvider.PatchOverridenProperties.RootTransformOnly;
-                        if (wantRootTransformOverridesOnly && targetInContent != prefabContentsRoot.transform)
+                        if (onlyPatchRootTransform && targetInContent != prefabContentsRoot.transform)
                             continue;
 
                         if (instanceTransformSO != null)
@@ -654,8 +735,7 @@ namespace UnityEditor.Experimental.SceneManagement
                                 continue;
 
                             // Root can be a different object than it was in outer Stage, så check again here.
-                            bool wantRootTransformOverridesOnly = patchOverridenPropertiesState == PrefabSettingsProvider.PatchOverridenProperties.RootTransformOnly;
-                            if (wantRootTransformOverridesOnly && targetInContent != prefabContentsRoot.transform)
+                            if (onlyPatchRootTransform && targetInContent != prefabContentsRoot.transform)
                                 continue;
 
                             DrivenPropertyManager.TryRegisterProperty(this, targetInContent, mod.propertyPath);
@@ -668,6 +748,9 @@ namespace UnityEditor.Experimental.SceneManagement
 
         void ApplyPatchedPropertiesToContent()
         {
+            if (m_PatchedProperties.Count == 0)
+                return;
+
             for (int i = m_PatchedProperties.Count - 1; i >= 0; i--)
             {
                 PropertyModification mod = m_PatchedProperties[i].modification;
@@ -726,6 +809,12 @@ namespace UnityEditor.Experimental.SceneManagement
             if (SceneHierarchy.s_DebugPrefabStage)
                 Debug.Log("RELOADING Prefab at " + m_PrefabAssetPath);
 
+            if (!isCurrentStage)
+            {
+                Debug.LogError("Only reloading the current PrefabStage is supported. Please report a bug");
+                return;
+            }
+
             var sceneHierarchyWindows = SceneHierarchyWindow.GetAllSceneHierarchyWindows();
             foreach (SceneHierarchyWindow sceneHierarchyWindow in sceneHierarchyWindows)
                 SaveHierarchyState(sceneHierarchyWindow);
@@ -754,8 +843,7 @@ namespace UnityEditor.Experimental.SceneManagement
             // because the RenderSettings of the customScene is used to override lighting settings for this SceneView.
             PrefabStage prefabStage = GetContextStage() as PrefabStage;
             sceneView.customScene = prefabStage == null ? default(Scene) : prefabStage.scene;
-
-            sceneView.customParentForDraggedObjects = prefabContentsRoot.transform;
+            sceneView.customParentForNewGameObjects = prefabContentsRoot.transform;
             switch (mode)
             {
                 case PrefabStage.Mode.InIsolation:
@@ -1031,6 +1119,11 @@ namespace UnityEditor.Experimental.SceneManagement
             if (m_PrefabWasChangedOnDisk)
             {
                 m_PrefabWasChangedOnDisk = false;
+
+                if (!isCurrentStage)
+                {
+                    return;
+                }
 
                 if (!File.Exists(m_PrefabAssetPath))
                     return;
@@ -1384,11 +1477,17 @@ namespace UnityEditor.Experimental.SceneManagement
             switch (dialogResult)
             {
                 case 0:
-                    return Save(); // save changes and continue if possible
+                    return Save(); // save changes and continue current operation
+
                 case 1:
-                    return true; // discard changes and continue
+                    // The user have accepted to discard changes
+                    if (hasUnsavedChanges && !m_IsAssetMissing)
+                        ReloadStage();
+                    return true; // continue current operation
+
                 case 2:
                     return false; // cancel and discontinue current operation
+
                 default:
                     throw new InvalidOperationException("Unhandled dialog result " + dialogResult);
             }
@@ -1409,6 +1508,18 @@ namespace UnityEditor.Experimental.SceneManagement
             }
         }
 
+        bool UpdateLastPrefabSourceFileHashIfNeeded()
+        {
+            var guid = AssetDatabase.AssetPathToGUID(m_PrefabAssetPath);
+            var prefabSourceFileHash = AssetDatabase.GetSourceAssetFileHash(guid);
+            if (m_LastPrefabSourceFileHash != prefabSourceFileHash)
+            {
+                m_LastPrefabSourceFileHash = prefabSourceFileHash;
+                return true;
+            }
+            return false;
+        }
+
         internal void OnAssetsChangedOnHDD(string[] importedAssets, string[] deletedAssets, string[] movedAssets, string[] movedFromAssetPaths)
         {
             if (SceneHierarchy.s_DebugPrefabStage)
@@ -1424,13 +1535,32 @@ namespace UnityEditor.Experimental.SceneManagement
                 }
             }
 
+            for (int i = 0; i < deletedAssets.Length; ++i)
+            {
+                if (deletedAssets[i] == m_PrefabAssetPath)
+                {
+                    m_IsAssetMissing = true;
+                    break;
+                }
+            }
+
             // Detect if our Prefab was modified on HDD outside Prefab Mode (in that case we should ask the user if he wants to reload it)
             for (int i = 0; i < importedAssets.Length; ++i)
             {
                 if (importedAssets[i] == m_PrefabAssetPath)
                 {
-                    if (!m_IgnoreNextAssetImportedEventForCurrentPrefab)
-                        m_PrefabWasChangedOnDisk = true;
+                    m_IsAssetMissing = false;
+                    if (UpdateLastPrefabSourceFileHashIfNeeded() && !m_IgnoreNextAssetImportedEventForCurrentPrefab)
+                    {
+                        if (isCurrentStage)
+                        {
+                            m_PrefabWasChangedOnDisk = true;
+                        }
+                        else
+                        {
+                            m_NeedsReloadingWhenReturningToStage = true;
+                        }
+                    }
 
                     // Reset the ignore flag when we finally have imported the saved prefab (We set this flag when saving the Prefab from Prefab Mode)
                     // Note we can get multiple OnAssetsChangedOnHDD events before the Prefab imported event if e.g folders of the Prefab path needs to be reimported first.
@@ -1443,6 +1573,8 @@ namespace UnityEditor.Experimental.SceneManagement
         // This method is not called from the SceneView if the SceneView does not support stage handling
         internal override void OnPreSceneViewRender(SceneView sceneView)
         {
+            StaticOcclusionCullingVisualization.showOcclusionCulling = false;
+
             if (mode != Mode.InContext)
                 return;
 
@@ -1455,6 +1587,8 @@ namespace UnityEditor.Experimental.SceneManagement
         // This method is not called from the SceneView if the SceneView does not support stage handling
         internal override void OnPostSceneViewRender(SceneView sceneView)
         {
+            StaticOcclusionCullingVisualization.showOcclusionCulling = OcclusionCullingWindow.isVisible;
+
             if (mode != Mode.InContext)
                 return;
 
@@ -1475,8 +1609,14 @@ namespace UnityEditor.Experimental.SceneManagement
 
         internal override void OnControlsGUI(SceneView sceneView)
         {
-            InContextModeSelector(sceneView);
-            GUILayout.Space(5);
+            GUILayout.Space(15);
+            if (mode == Mode.InContext)
+            {
+                InContextModeSelector(sceneView);
+                GUILayout.Space(15);
+                VisualizeOverridesToggle();
+                GUILayout.Space(15);
+            }
             AutoSaveButtons(sceneView);
         }
 
@@ -1556,16 +1696,11 @@ namespace UnityEditor.Experimental.SceneManagement
 
         void InContextModeSelector(SceneView sceneView)
         {
-            if (mode != Mode.InContext)
-                return;
-
             if (s_ContextRenderModeSelector == null)
             {
                 s_ContextRenderModeSelector = new ExposablePopupMenu();
                 InitContextRenderModeSelector();
             }
-
-            GUILayout.Space(10);
 
             EditorGUI.BeginChangeCheck();
             var rect = GUILayoutUtility.GetRect(s_ContextRenderModeSelector.widthOfPopupAndLabel, s_ContextRenderModeSelector.widthOfButtonsAndLabel, 0, 22);
@@ -1574,9 +1709,22 @@ namespace UnityEditor.Experimental.SceneManagement
             {
                 SceneView.RepaintAll();
             }
+        }
 
+        internal static SavedBool s_PatchAllOverriddenProperties = new SavedBool("InContextEditingPatchOverriddenProperties", false);
 
-            GUILayout.Space(10);
+        void VisualizeOverridesToggle()
+        {
+            EditorGUI.BeginChangeCheck();
+            bool patchAll = GUILayout.Toggle(s_PatchAllOverriddenProperties.value, Styles.showOverridesLabel);
+            if (EditorGUI.EndChangeCheck())
+            {
+                s_PatchAllOverriddenProperties.value = patchAll;
+                DrivenPropertyManager.UnregisterProperties(this);
+                RecordPatchedPropertiesForContent();
+                ApplyPatchedPropertiesToContent();
+                EditorApplication.RequestRepaintAllViews();
+            }
         }
 
         void CachePrefabFolderInfo()
@@ -1609,14 +1757,13 @@ namespace UnityEditor.Experimental.SceneManagement
 
             if (!autoSave)
             {
-                using (new EditorGUI.DisabledScope(!openForEdit || !hasUnsavedChanges))
+                using (new EditorGUI.DisabledScope((!openForEdit || !hasUnsavedChanges) && !isAssetMissing))
                 {
                     if (GUILayout.Button(Styles.saveButtonContent, Styles.button))
                         Save();
                 }
             }
 
-            using (new EditorGUI.DisabledScope(temporarilyDisableAutoSave))
             {
                 bool autoSaveForScene = autoSave;
                 EditorGUI.BeginChangeCheck();
@@ -1628,10 +1775,7 @@ namespace UnityEditor.Experimental.SceneManagement
             if (!openForEdit)
             {
                 if (GUILayout.Button(Styles.checkoutButtonContent, Styles.button))
-                {
-                    Task task = Provider.Checkout(AssetDatabase.LoadAssetAtPath<GameObject>(assetPath), CheckoutMode.Both);
-                    task.Wait();
-                }
+                    AssetDatabase.MakeEditable(assetPath);
             }
         }
 
@@ -1809,69 +1953,6 @@ namespace UnityEditor.Experimental.SceneManagement
                 return true;
             }
             return false;
-        }
-    }
-
-    internal class PrefabSettingsProvider : SettingsProvider
-    {
-        public enum PatchOverridenProperties
-        {
-            All,
-            AllTransforms,
-            RootTransformOnly
-        }
-
-        class Styles
-        {
-            public static GUIContent patchTransformsOnly = new GUIContent("Patch Overridden Properties");
-        }
-
-        const string kPatchOverridenProperties = "InContextEditingPatchTransformsOnly";
-
-        public static PatchOverridenProperties GetPatchOverridenPropertiesState()
-        {
-            return (PatchOverridenProperties)EditorPrefs.GetInt(kPatchOverridenProperties, (int)PatchOverridenProperties.RootTransformOnly);
-        }
-
-        public PrefabSettingsProvider(string path, SettingsScope scope = SettingsScope.User)
-            : base(path, scope) {}
-
-        public static bool IsSettingsAvailable()
-        {
-            return true;
-        }
-
-        public override void OnGUI(string searchContext)
-        {
-            using (new SettingsWindow.GUIScope())
-            {
-                EditorGUILayout.LabelField("Editing in Context", EditorStyles.boldLabel);
-
-                EditorGUI.BeginChangeCheck();
-                var newSelection = (PatchOverridenProperties)EditorGUILayout.EnumPopup(
-                    Styles.patchTransformsOnly,
-                    GetPatchOverridenPropertiesState());
-                if (EditorGUI.EndChangeCheck())
-                    EditorPrefs.SetInt(kPatchOverridenProperties, (int)newSelection);
-
-                EditorGUILayout.Space();
-            }
-        }
-
-        [SettingsProvider]
-        public static SettingsProvider CreatePrefabSettingsProvider()
-        {
-            if (IsSettingsAvailable())
-            {
-                var provider = new PrefabSettingsProvider("Preferences/Prefab Mode", SettingsScope.User);
-
-                // Automatically extract all keywords from the Styles.
-                provider.keywords = GetSearchKeywordsFromGUIContentProperties<Styles>();
-                return provider;
-            }
-
-            // Settings Asset doesn't exist yet; no need to display anything in the Settings window.
-            return null;
         }
     }
 }

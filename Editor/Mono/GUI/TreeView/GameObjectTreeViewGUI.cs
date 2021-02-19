@@ -10,8 +10,9 @@ using UnityEditor.Experimental.SceneManagement;
 using UnityEditor.IMGUI.Controls;
 using UnityEditor.SceneManagement;
 using UnityEditor.StyleSheets;
+using UnityEditor.VersionControl;
+using UnityEditorInternal.VersionControl;
 using UnityEngine;
-using UnityEngine.Assertions.Comparers;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
@@ -29,14 +30,11 @@ namespace UnityEditor
 
         internal static class GameObjectStyles
         {
-            public static GUIStyle disabledLabel = "PR DisabledLabel";
+            public static GUIStyle disabledLabel = new GUIStyle("PR DisabledLabel");
             public static GUIStyle prefabLabel = "PR PrefabLabel";
             public static GUIStyle disabledPrefabLabel = "PR DisabledPrefabLabel";
             public static GUIStyle brokenPrefabLabel = "PR BrokenPrefabLabel";
             public static GUIStyle disabledBrokenPrefabLabel = "PR DisabledBrokenPrefabLabel";
-            public static GUIContent loadSceneGUIContent = new GUIContent(EditorGUIUtility.FindTexture("SceneLoadIn"), "Load scene");
-            public static GUIContent unloadSceneGUIContent = new GUIContent(EditorGUIUtility.FindTexture("SceneLoadOut"), "Unload scene");
-            public static GUIContent saveSceneGUIContent = new GUIContent(EditorGUIUtility.FindTexture("SceneSave"), "Save scene");
             public static GUIStyle optionsButtonStyle = "PaneOptions";
             public static GUIStyle sceneHeaderBg = "SceneTopBarBg";
             public static SVC<float> sceneHeaderWidth = new SVC<float>("SceneTopBarBg", "border-bottom-width", 1f);
@@ -48,6 +46,13 @@ namespace UnityEditor
             public static Texture2D sceneAssetIcon = EditorGUIUtility.FindTexture(typeof(SceneAsset));
             public static Texture2D prefabIcon = EditorGUIUtility.FindTexture("Prefab Icon");
 
+            static GameObjectStyles()
+            {
+                disabledLabel.fixedHeight = 0;
+                disabledLabel.alignment = TextAnchor.UpperLeft;
+                disabledLabel.padding = Styles.lineBoldStyle.padding;
+            }
+
             public static readonly int kSceneHeaderIconsInterval = 2;
         }
 
@@ -55,6 +60,49 @@ namespace UnityEditor
         private float m_PrevTotalHeight;
         internal delegate float OnHeaderGUIDelegate(Rect availableRect, string scenePath);
         internal static OnHeaderGUIDelegate OnPostHeaderGUI = null;
+        private Dictionary<int, Asset[]> m_HierarchyPrefabToAssetIDMap;
+
+        private static Dictionary<string, int> s_ActiveParentObjectPerSceneGUID;
+
+        internal static void UpdateActiveParentObjectValuesForScene(string sceneGUID, int instanceID)
+        {
+            if (instanceID == 0)
+                s_ActiveParentObjectPerSceneGUID.Remove(sceneGUID);
+            else
+                s_ActiveParentObjectPerSceneGUID[sceneGUID] = instanceID;
+        }
+
+        internal void GetActiveParentObjectValuesFromSessionInfo()
+        {
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var key = SceneManager.GetSceneAt(i).guid;
+                var id = SceneHierarchy.GetDefaultParentForSession(SceneManager.GetSceneAt(i).guid);
+                if (id != 0)
+                    s_ActiveParentObjectPerSceneGUID.Add(key, id);
+            }
+        }
+
+        static bool DetectSceneGuidMismatchInActiveParentState(KeyValuePair<string, int> activeParentObject)
+        {
+            var go = EditorUtility.InstanceIDToObject(activeParentObject.Value) as GameObject;
+            if (go != null && go.scene.guid != activeParentObject.Key)
+            {
+                SceneHierarchy.SetDefaultParentForSession(activeParentObject.Key, 0);
+                return true;
+            }
+
+            return false;
+        }
+
+        internal static void RemoveInvalidActiveParentObjects()
+        {
+            var itemsToRemove = s_ActiveParentObjectPerSceneGUID.Where(activeParent => DetectSceneGuidMismatchInActiveParentState(activeParent)).ToArray();
+            foreach (var itemToRemove in itemsToRemove)
+            {
+                SceneHierarchy.UpdateSessionStateInfoAndActiveParentObjectValuesForScene(itemToRemove.Key, 0);
+            }
+        }
 
         GameObjectTreeViewDataSource dataSource
         {
@@ -80,6 +128,10 @@ namespace UnityEditor
             m_PrevScollPos = m_TreeView.state.scrollPos.y;
             m_PrevTotalHeight = m_TreeView.GetTotalRect().height;
             k_BaseIndent = SceneVisibilityHierarchyGUI.utilityBarWidth;
+            s_ActiveParentObjectPerSceneGUID = new Dictionary<string, int>();
+            GetActiveParentObjectValuesFromSessionInfo();
+
+            m_HierarchyPrefabToAssetIDMap = new Dictionary<int, Asset[]>();
         }
 
         private void SceneVisibilityManagerOnVisibilityChanged()
@@ -473,6 +525,20 @@ namespace UnityEditor
 
             if (PrefabUtility.IsAddedGameObjectOverride(go))
                 item.overlayIcon = EditorGUIUtility.LoadIcon("PrefabOverlayAdded Icon");
+
+
+            if (!EditorApplication.isPlaying)
+            {
+                Asset asset = GetAsset(item);
+                if (asset != null && !m_HierarchyPrefabToAssetIDMap.ContainsKey(item.id))
+                {
+                    string metaPath = asset.path.Trim('/') + ".meta";
+                    Asset metaAsset = Provider.GetAssetByPath(metaPath);
+                    Asset[] assets = new[] {asset, metaAsset};
+
+                    m_HierarchyPrefabToAssetIDMap.Add(item.id, assets);
+                }
+            }
         }
 
         void SetPrefabModeButtonVisibility(GameObjectTreeViewItem item)
@@ -566,6 +632,11 @@ namespace UnityEditor
                     lineStyle = (colorCode < 4) ? GameObjectStyles.brokenPrefabLabel : GameObjectStyles.disabledBrokenPrefabLabel;
             }
 
+            if (s_ActiveParentObjectPerSceneGUID.ContainsValue(goItem.id))
+            {
+                lineStyle = Styles.lineBoldStyle;
+            }
+
             lineStyle.padding.left = 0;
             Texture icon = GetEffectiveIcon(goItem);
 
@@ -575,18 +646,48 @@ namespace UnityEditor
                 iconRect.width = k_IconWidth;
                 bool renderDisabled = colorCode >= 4;
                 Color col = GUI.color;
-                if (renderDisabled)
+                if (renderDisabled || (CutBoard.hasCutboardData && CutBoard.IsGameObjectPartOfCutAndPaste((GameObject)goItem.objectPPTR)))
                     col = new Color(1f, 1f, 1f, 0.5f);
                 GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit, true, 0, col, 0, 0);
 
                 if (goItem.overlayIcon != null)
                     GUI.DrawTexture(iconRect, goItem.overlayIcon, ScaleMode.ScaleToFit, true, 0, col, 0, 0);
 
+                if (!EditorApplication.isPlaying)
+                {
+                    Asset[] assets;
+                    m_HierarchyPrefabToAssetIDMap.TryGetValue(item.id, out assets);
+                    if (assets != null)
+                    {
+                        iconRect.x -= 10;
+                        iconRect.width += 7 * 2;
+
+                        Overlay.DrawHierarchyOverlay(assets[0], assets[1], iconRect);
+                    }
+                }
+
                 rect.xMin += iconTotalPadding + k_IconWidth + k_SpaceBetweenIconAndText;
             }
 
             // Draw text
             lineStyle.Draw(rect, label, false, false, selected, focused);
+        }
+
+        private Asset GetAsset(GameObjectTreeViewItem item)
+        {
+            if (!Provider.isActive)
+                return null;
+
+            GameObject go = (GameObject)item.objectPPTR;
+
+            if (!go || PrefabUtility.GetNearestPrefabInstanceRoot(go) != go)
+                return null;
+
+            string assetPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(go);
+            var guid = AssetDatabase.AssetPathToGUID(assetPath);
+
+            Asset vcAsset = string.IsNullOrEmpty(guid) ? null : Provider.GetAssetByGUID(guid);
+            return vcAsset;
         }
 
         public float PrefabModeButton(GameObjectTreeViewItem item, Rect selectionRect)

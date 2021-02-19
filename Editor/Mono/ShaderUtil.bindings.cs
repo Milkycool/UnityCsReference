@@ -14,6 +14,13 @@ using UnityEngine.Experimental.Rendering;
 
 namespace UnityEditor
 {
+    public enum PreprocessorOverride
+    {
+        UseProjectSettings = 0,
+        ForcePlatformPreprocessor = 1,
+        ForceCachingPreprocessor = 2
+    }
+
     [Serializable]
     [RequiredByNativeCode]
     [NativeHeader("Editor/Src/ShaderMenu.h")]
@@ -248,6 +255,7 @@ namespace UnityEditor
             ApplyPropertyImpl(prop, propertyMask, undoName);
         }
 
+        [NativeThrows]
         extern private static void ApplyPropertyImpl(System.Object prop, int propertyMask, string undoName);
 
         internal static void ApplyMaterialPropertyBlockToMaterialProperty(MaterialPropertyBlock propertyBlock, MaterialProperty materialProperty)

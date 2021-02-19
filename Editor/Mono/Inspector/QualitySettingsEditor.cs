@@ -30,6 +30,7 @@ namespace UnityEditor
             public static readonly GUIContent kBillboardsFaceCameraPos = EditorGUIUtility.TrTextContent("Billboards Face Camera Position", "Make billboards face towards camera position. Otherwise they face towards camera plane. This makes billboards look nicer when camera rotates but is more expensive to render.");
             public static readonly GUIContent kVSyncCountLabel = EditorGUIUtility.TrTextContent("VSync Count");
             public static readonly GUIContent kLODBiasLabel = EditorGUIUtility.TrTextContent("LOD Bias");
+            public static readonly GUIContent kMipStrippingHint = EditorGUIUtility.TrTextContent("Where maximum possible texture mip resolution for a platform is less than full, package size can be reduced by enabling Texture MipMap Stripping in Player Settings.");
         }
 
         private class Styles
@@ -313,7 +314,10 @@ namespace UnityEditor
             if (m_DeleteLevel >= 0)
             {
                 if (m_DeleteLevel < selectedLevel || m_DeleteLevel == m_QualitySettingsProperty.arraySize - 1)
+                {
                     selectedLevel = Mathf.Max(0, selectedLevel - 1);
+                    QualitySettings.SetQualityLevel(selectedLevel);
+                }
 
                 //Always ensure there is one quality setting
                 if (m_QualitySettingsProperty.arraySize > 1 && m_DeleteLevel >= 0 && m_DeleteLevel < m_QualitySettingsProperty.arraySize)
@@ -410,10 +414,19 @@ namespace UnityEditor
             EditorGUILayout.HelpBox(Content.kSoftParticlesHint.text, MessageType.Warning, false);
         }
 
+        void MipStrippingHintGUI()
+        {
+            if (PlayerSettings.mipStripping)
+                return;
+
+            EditorGUILayout.HelpBox(Content.kMipStrippingHint.text, MessageType.Info, false);
+        }
+
         /**
          * Internal function that takes the shadow cascade splits property field, and dispatches a call to render the GUI.
          * It also transfers the result back
          */
+
         private void DrawCascadeSplitGUI<T>(ref SerializedProperty shadowCascadeSplit)
         {
             float[] cascadePartitionSizes = null;
@@ -464,6 +477,10 @@ namespace UnityEditor
             var settings = GetQualitySettings();
             var defaults = GetDefaultQualityForPlatforms();
             var selectedLevel = QualitySettings.GetQualityLevel();
+            if (selectedLevel >= m_QualitySettingsProperty.arraySize)
+            {
+                selectedLevel = m_QualitySettingsProperty.arraySize - 1;
+            }
 
             EditorGUI.BeginChangeCheck();
             selectedLevel = DoQualityLevelSelection(selectedLevel, settings, defaults);
@@ -516,12 +533,13 @@ namespace UnityEditor
 
             if (usingSRP)
                 EditorGUILayout.HelpBox("A Scriptable Render Pipeline is in use, some settings will not be used and are hidden", MessageType.Info);
-
             GUILayout.Space(10);
 
             GUILayout.Label(EditorGUIUtility.TempContent("Rendering"), EditorStyles.boldLabel);
 
             customRenderPipeline.objectReferenceValue = EditorGUILayout.ObjectField(customRenderPipeline.objectReferenceValue, typeof(RenderPipelineAsset), false);
+            if (!usingSRP && customRenderPipeline.objectReferenceValue != null)
+                EditorGUILayout.HelpBox("Missing a Scriptable Render Pipeline in Graphics: \"Scriptable Render Pipeline Settings\" to use Scriptable Render Pipeline from Quality: \"Custom Render Pipeline\".", MessageType.Warning);
 
             if (!usingSRP)
                 EditorGUILayout.PropertyField(pixelLightCountProperty);
@@ -533,7 +551,10 @@ namespace UnityEditor
             {
                 RenderPipelineManager.CleanupRenderPipeline();
             }
-
+            if (QualitySettings.IsTextureResReducedOnAnyPlatform())
+            {
+                MipStrippingHintGUI();
+            }
             EditorGUILayout.PropertyField(anisotropicTexturesProperty);
 
             if (!usingSRP)
@@ -544,7 +565,8 @@ namespace UnityEditor
                     SoftParticlesHintGUI();
             }
 
-            EditorGUILayout.PropertyField(realtimeReflectionProbes);
+            if (!SupportedRenderingFeatures.active.overridesRealtimeReflectionProbes)
+                EditorGUILayout.PropertyField(realtimeReflectionProbes);
             EditorGUILayout.PropertyField(billboardsFaceCameraPosition, Content.kBillboardsFaceCameraPos);
             EditorGUILayout.PropertyField(resolutionScalingFixedDPIFactorProperty);
 
@@ -566,14 +588,15 @@ namespace UnityEditor
                 EditorGUI.indentLevel--;
             }
             bool shadowMaskSupported = SupportedRenderingFeatures.IsMixedLightingModeSupported(MixedLightingMode.Shadowmask);
+            bool showShadowMaskUsage = shadowMaskSupported && !SupportedRenderingFeatures.active.overridesShadowmask;
 
-            if (!usingSRP || shadowMaskSupported)
+            if (!usingSRP || showShadowMaskUsage)
             {
                 GUILayout.Space(10);
 
                 GUILayout.Label(EditorGUIUtility.TempContent("Shadows"), EditorStyles.boldLabel);
 
-                if (shadowMaskSupported)
+                if (showShadowMaskUsage)
                     EditorGUILayout.PropertyField(shadowMaskUsageProperty);
 
                 if (!usingSRP)

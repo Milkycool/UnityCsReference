@@ -109,6 +109,12 @@ namespace UnityEditor
         int m_SingleChannelComponent;
 
         [SerializeField]
+        int m_FlipbookRows;
+
+        [SerializeField]
+        int m_FlipbookColumns;
+
+        [SerializeField]
         int m_IgnorePngGamma;
 
         // memory layout of these is in TextureSettings.h
@@ -170,6 +176,10 @@ namespace UnityEditor
         private int m_CompressionQualitySet;
         [SerializeField]
         private int m_TextureFormatSet;
+
+        //For backward compatibility for an incorrectly applied gamma decoding step (bug)
+        [SerializeField]
+        int m_ApplyGammaDecoding;
 
         public TextureImporterType textureType
         {
@@ -259,6 +269,18 @@ namespace UnityEditor
         {
             get {return (TextureImporterSingleChannelComponent)m_SingleChannelComponent; }
             set { m_SingleChannelComponent = (int)value; }
+        }
+
+        public int flipbookRows
+        {
+            get => m_FlipbookRows;
+            set => m_FlipbookRows = value;
+        }
+
+        public int flipbookColumns
+        {
+            get => m_FlipbookColumns;
+            set => m_FlipbookColumns = value;
         }
 
         public bool readable

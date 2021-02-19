@@ -134,8 +134,8 @@ namespace UnityEditor
 //        [Obsolete("Lightmapping.giWorkflowMode is obsolete, use Lightmapping.lightingSettings.autoGenerate instead. ", false)]
         public static GIWorkflowMode giWorkflowMode
         {
-            get { return GetLightingSettingsOrDefaultsFallback().giWorkflowMode; }
-            set { GetOrCreateLightingsSettings().giWorkflowMode = value; }
+            get { return GetLightingSettingsOrDefaultsFallback().autoGenerate ? GIWorkflowMode.Iterative : GIWorkflowMode.OnDemand; }
+            set { GetOrCreateLightingsSettings().autoGenerate = (value == GIWorkflowMode.Iterative); }
         }
 
 //        [Obsolete("Lightmapping.realtimeGI is obsolete, use Lightmapping.lightingSettings.realtimeGI instead. ", false)]
@@ -152,9 +152,12 @@ namespace UnityEditor
             set { GetOrCreateLightingsSettings().bakedGI = value; }
         }
 
-        [Obsolete("Lightmapping.indirectOutputScale is obsolete, use DynamicGI.indirectScale instead. ", false)]
-        [StaticAccessor("GetGISettings()")]
-        public static extern float indirectOutputScale { get; set; }
+        [Obsolete("Lightmapping.indirectOutputScale is obsolete, use Lightmapping.lightingSettings.indirectScale instead. ", false)]
+        public static float indirectOutputScale
+        {
+            get { return GetLightingSettingsOrDefaultsFallback().indirectScale; }
+            set { GetOrCreateLightingsSettings().indirectScale = value; }
+        }
 
         [Obsolete("Lightmapping.bounceBoost is obsolete, use Lightmapping.lightingSettings.albedoBoost instead. ", false)]
         public static float bounceBoost
@@ -469,7 +472,7 @@ namespace UnityEditor
 
         [StaticAccessor("GetLightmapSettings()")]
         [NativeName("LightingSettingsDefaults_Scripting")]
-        internal static extern LightingSettings lightingSettingsDefaults { get; }
+        public static extern LightingSettings lightingSettingsDefaults { get; }
 
         // To be used by internal code when just reading settings, not settings them
         internal static LightingSettings GetLightingSettingsOrDefaultsFallback()
@@ -643,11 +646,11 @@ namespace UnityEditor.Experimental
 
         [NativeThrows]
         [FreeFunction]
-        public static extern bool BakeAsync(Scene scene);
+        public static extern bool BakeAsync(Scene targetScene);
 
         [NativeThrows]
         [FreeFunction]
-        public static extern bool Bake(Scene scene);
+        public static extern bool Bake(Scene targetScene);
 
         public static event Action additionalBakedProbesCompleted;
 
@@ -658,27 +661,49 @@ namespace UnityEditor.Experimental
         }
 
         [FreeFunction]
-        internal unsafe static extern bool GetAdditionalBakedProbes(int id, void* outBakedProbeSH, void* outBakedProbeValidity, int outBakedProbeCount);
+        internal unsafe static extern bool GetAdditionalBakedProbes(int id, void* outBakedProbeSH, void* outBakedProbeValidity, void* outBakedProbeOctahedralDepth, int outBakedProbeCount);
 
+        [Obsolete("Please use the new GetAdditionalBakedProbes with added octahedral depth map data.", false)]
         public unsafe static bool GetAdditionalBakedProbes(int id, NativeArray<SphericalHarmonicsL2> outBakedProbeSH, NativeArray<float> outBakedProbeValidity)
         {
+            const int octahedralDepthMapTexelCount = 64; // 8*8
+            var outBakedProbeOctahedralDepth = new NativeArray<float>(outBakedProbeSH.Length * octahedralDepthMapTexelCount, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            bool success = GetAdditionalBakedProbes(id, outBakedProbeSH, outBakedProbeValidity, outBakedProbeOctahedralDepth);
+            outBakedProbeOctahedralDepth.Dispose();
+            return success;
+        }
+
+        public unsafe static bool GetAdditionalBakedProbes(int id, NativeArray<SphericalHarmonicsL2> outBakedProbeSH, NativeArray<float> outBakedProbeValidity, NativeArray<float> outBakedProbeOctahedralDepth)
+        {
             if (outBakedProbeSH == null || !outBakedProbeSH.IsCreated ||
-                outBakedProbeValidity == null || !outBakedProbeValidity.IsCreated)
+                outBakedProbeValidity == null || !outBakedProbeValidity.IsCreated ||
+                outBakedProbeOctahedralDepth == null || !outBakedProbeOctahedralDepth.IsCreated)
             {
                 Debug.LogError("Output arrays need to be properly initialized.");
                 return false;
             }
 
-            if (outBakedProbeSH.Length != outBakedProbeValidity.Length)
+            const int octahedralDepthMapTexelCount = 64; // 8*8
+
+            int numEntries = outBakedProbeSH.Length;
+
+            if (outBakedProbeOctahedralDepth.Length != numEntries * octahedralDepthMapTexelCount)
             {
-                Debug.LogError("Both output arrays must have equal size.");
+                Debug.LogError("Octahedral array must provide " + numEntries * octahedralDepthMapTexelCount + " floats.");
+                return false;
+            }
+
+            if (outBakedProbeValidity.Length != numEntries)
+            {
+                Debug.LogError("All output arrays must have equal size.");
                 return false;
             }
 
             void* shPtr = NativeArrayUnsafeUtility.GetUnsafePtr(outBakedProbeSH);
             void* validityPtr = NativeArrayUnsafeUtility.GetUnsafePtr(outBakedProbeValidity);
+            void* octahedralDepthPtr = NativeArrayUnsafeUtility.GetUnsafePtr(outBakedProbeOctahedralDepth);
 
-            return GetAdditionalBakedProbes(id, shPtr, validityPtr, outBakedProbeSH.Length);
+            return GetAdditionalBakedProbes(id, shPtr, validityPtr, octahedralDepthPtr, outBakedProbeSH.Length);
         }
 
         [FreeFunction]

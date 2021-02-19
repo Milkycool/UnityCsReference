@@ -12,8 +12,6 @@ using Object = UnityEngine.Object;
 using UnityEditor.AnimatedValues;
 using Unity.Profiling;
 using System.Globalization;
-using UnityEditor.Accessibility;
-using Unity.Collections.LowLevel.Unsafe;
 
 namespace UnityEditorInternal
 {
@@ -42,6 +40,9 @@ namespace UnityEditorInternal
             public string name;
             public bool alive;
             public int maxDepth;
+
+            List<FlowEventData> m_ActiveFlowEvents = new List<FlowEventData>();
+
             public ThreadInfo(string name, int threadIndex, int maxDepth, int linesToDisplay)
             {
                 this.name = name;
@@ -50,17 +51,39 @@ namespace UnityEditorInternal
                 this.maxDepth = Mathf.Max(1, maxDepth);
             }
 
+            public List<FlowEventData> ActiveFlowEvents
+            {
+                get
+                {
+                    return m_ActiveFlowEvents;
+                }
+            }
+
             public int CompareTo(ThreadInfo other)
             {
                 if (this == other)
                     return 0;
                 return EditorUtility.NaturalCompare(name, other.name);
             }
+
+            public struct FlowEventData
+            {
+                public RawFrameDataView.FlowEvent flowEvent;
+                public int frameIndex;
+
+                public bool hasParentSampleIndex
+                {
+                    get
+                    {
+                        return (flowEvent.ParentSampleIndex > 0);
+                    }
+                }
+            }
         }
 
         internal class GroupInfo
         {
-            private const int k_DefaultLineCountPerThread = 2;
+            const int k_DefaultLineCountPerThread = 2;
 
             public AnimBool expanded;
             public string name;
@@ -68,8 +91,8 @@ namespace UnityEditorInternal
             public List<ThreadInfo> threads;
             public int defaultLineCountPerThread = k_DefaultLineCountPerThread;
 
-            public GroupInfo(string name, UnityEngine.Events.UnityAction foldoutStateChangedCallback) :
-                this(name, foldoutStateChangedCallback, SessionState.GetBool(name, false)) {}
+            public GroupInfo(string name, UnityEngine.Events.UnityAction foldoutStateChangedCallback)
+                : this(name, foldoutStateChangedCallback, false) {}
 
             public GroupInfo(string name, UnityEngine.Events.UnityAction foldoutStateChangedCallback, bool expanded, int defaultLineCountPerThread = k_DefaultLineCountPerThread, float height = k_GroupHeight)
             {
@@ -85,7 +108,8 @@ namespace UnityEditorInternal
             }
         }
 
-        private List<GroupInfo> m_Groups = null;
+        List<GroupInfo> m_Groups = null;
+        List<int> m_SamplesWithDrawnFlowEventsPerThreadCache = new List<int>();
 
         // Not localizable strings - should match group names in native code.
         const string k_MainGroupName = "";
@@ -111,7 +135,7 @@ namespace UnityEditorInternal
             public GUIStyle timeAreaToolbar = "TimeAreaToolbar";
             public GUIStyle digDownArrow = "ProfilerTimelineDigDownArrow";
             public GUIStyle rollUpArrow = "ProfilerTimelineRollUpArrow";
-            public GUIStyle bottomShadow =  "BottomShadowInwards";
+            public GUIStyle bottomShadow = "BottomShadowInwards";
 
             public string localizedStringTotal = L10n.Tr("Total");
             public string localizedStringInstances = L10n.Tr("Instances");
@@ -125,13 +149,14 @@ namespace UnityEditorInternal
             public Color outOfRangeColor => EditorGUIUtility.isProSkin ? m_OutOfRangeColorDark : m_OutOfRangeColorLight;
         }
 
-        private static Styles ms_Styles;
-        private static Styles styles
+        static Styles ms_Styles;
+
+        static Styles styles
         {
             get { return ms_Styles ?? (ms_Styles = new Styles()); }
         }
 
-        private class EntryInfo
+        class EntryInfo
         {
             public int frameId = -1;
             public int threadId = -1;
@@ -141,7 +166,11 @@ namespace UnityEditorInternal
             public float duration = 0.0f;
             public string name = string.Empty;
 
-            public bool IsValid() { return this.name.Length > 0; }
+            public bool IsValid()
+            {
+                return this.name.Length > 0;
+            }
+
             public bool Equals(int frameId, int threadId, int nativeIndex)
             {
                 return frameId == this.frameId && threadId == this.threadId && nativeIndex == this.nativeIndex;
@@ -159,7 +188,7 @@ namespace UnityEditorInternal
             }
         }
 
-        private class SelectedEntryInfo : EntryInfo
+        class SelectedEntryInfo : EntryInfo
         {
             // The associated GameObjects instance ID. Negative means Native Object, Positive means Managed Object, 0 means not set (as in, no object associated)
             public int instanceId = 0;
@@ -168,6 +197,16 @@ namespace UnityEditorInternal
             public float totalDuration = -1.0f;
             public int instanceCount = -1;
             public string callstackInfo = string.Empty;
+
+            List<RawFrameDataView.FlowEvent> m_FlowEvents = new List<RawFrameDataView.FlowEvent>();
+
+            public List<RawFrameDataView.FlowEvent> FlowEvents
+            {
+                get
+                {
+                    return m_FlowEvents;
+                }
+            }
 
             public override void Reset()
             {
@@ -179,32 +218,33 @@ namespace UnityEditorInternal
                 this.totalDuration = -1.0f;
                 this.instanceCount = -1;
                 this.callstackInfo = string.Empty;
+
+                FlowEvents.Clear();
             }
         }
 
-        private float scrollOffsetY
+        float scrollOffsetY
         {
-            get
-            {
-                return -m_TimeArea.shownArea.y * m_TimeArea.scale.y;
-            }
+            get { return -m_TimeArea.shownArea.y * m_TimeArea.scale.y; }
         }
 
         [NonSerialized]
-        private ZoomableArea m_TimeArea;
-        private TickHandler m_HTicks;
-        private IProfilerWindowController m_Window;
-        private SelectedEntryInfo m_SelectedEntry = new SelectedEntryInfo();
-        private float m_SelectedThreadY = 0.0f;
-        private float m_SelectedThreadYRange = 0.0f;
-        private ThreadInfo m_SelectedThread = null;
-        private int m_LastSelectedFrameID = -1;
-        private float m_LastHeightForAllBars = -1;
-        private float m_LastFullRectHeight = -1;
-        private float m_MaxLinesToDisplayForTheCurrentlyModifiedSplitter = -1;
+        ZoomableArea m_TimeArea;
+        TickHandler m_HTicks;
+        SelectedEntryInfo m_SelectedEntry = new SelectedEntryInfo();
+        float m_SelectedThreadY = 0.0f;
+        float m_SelectedThreadYRange = 0.0f;
+        ThreadInfo m_SelectedThread = null;
+        int m_LastSelectedFrameID = -1;
+        float m_LastHeightForAllBars = -1;
+        float m_LastFullRectHeight = -1;
+        float m_MaxLinesToDisplayForTheCurrentlyModifiedSplitter = -1;
+
+        [NonSerialized]
+        List<RawFrameDataView.FlowEvent> m_CachedThreadFlowEvents = new List<RawFrameDataView.FlowEvent>();
 
         [Flags]
-        private enum ProcessedInputs
+        enum ProcessedInputs
         {
             MouseDown = 1 << 0,
             PanningOrZooming = 1 << 1,
@@ -213,16 +253,16 @@ namespace UnityEditorInternal
             RangeSelection = 1 << 4,
         }
 
-        private ProcessedInputs m_LastRepaintProcessedInputs;
-        private ProcessedInputs m_CurrentlyProcessedInputs;
+        ProcessedInputs m_LastRepaintProcessedInputs;
+        ProcessedInputs m_CurrentlyProcessedInputs;
 
-        private enum HandleThreadSplitterFoldoutButtonsCommand
+        enum HandleThreadSplitterFoldoutButtonsCommand
         {
             OnlyHandleInput,
             OnlyDraw,
         }
 
-        private enum ThreadSplitterCommand
+        enum ThreadSplitterCommand
         {
             HandleThreadSplitter,
             HandleThreadSplitterFoldoutButtons,
@@ -243,26 +283,42 @@ namespace UnityEditorInternal
 
         static readonly ProfilerMarker m_DoGUIMarker = new ProfilerMarker(nameof(ProfilerTimelineGUI) + ".DoGUI");
 
-        public ProfilerTimelineGUI(IProfilerWindowController window)
+        public ProfilerTimelineGUI()
         {
-            m_Window = window;
             // Configure default groups
             m_Groups = new List<GroupInfo>(new GroupInfo[]
             {
-                new GroupInfo(k_MainGroupName, m_Window.Repaint, true, 3, 0),
-                new GroupInfo(k_JobSystemGroupName, m_Window.Repaint),
-                new GroupInfo(k_LoadingGroupName, m_Window.Repaint),
-                new GroupInfo(k_ScriptingThreadsGroupName, m_Window.Repaint),
-                new GroupInfo(k_BackgroundJobSystemGroupName, m_Window.Repaint),
-                new GroupInfo(k_ProfilerThreadsGroupName, m_Window.Repaint),
-                new GroupInfo(k_OtherThreadsGroupName, m_Window.Repaint),
+                new GroupInfo(k_MainGroupName, RepaintProfilerWindow, true, 3, 0),
+                new GroupInfo(k_JobSystemGroupName, RepaintProfilerWindow),
+                new GroupInfo(k_LoadingGroupName, RepaintProfilerWindow),
+                new GroupInfo(k_ScriptingThreadsGroupName, RepaintProfilerWindow),
+                new GroupInfo(k_BackgroundJobSystemGroupName, RepaintProfilerWindow),
+                new GroupInfo(k_ProfilerThreadsGroupName, RepaintProfilerWindow),
+                new GroupInfo(k_OtherThreadsGroupName, RepaintProfilerWindow),
             });
 
             m_HTicks = new TickHandler();
             m_HTicks.SetTickModulos(k_TickModulos);
         }
 
-        private void UpdateGroupAndThreadInfo(ref ProfilerFrameDataIterator iter, int frameIndex)
+        public override void OnEnable(CPUorGPUProfilerModule cpuOrGpuModule, IProfilerWindowController profilerWindow, bool isGpuView)
+        {
+            base.OnEnable(cpuOrGpuModule, profilerWindow, isGpuView);
+            if (m_Groups != null)
+            {
+                for (int i = 0; i < m_Groups.Count; i++)
+                {
+                    m_Groups[i].expanded.value = SessionState.GetBool($"Profiler.Timeline.GroupExpanded.{m_Groups[i].name}", false);
+                }
+            }
+        }
+
+        void RepaintProfilerWindow()
+        {
+            m_ProfilerWindow?.Repaint();
+        }
+
+        void UpdateGroupAndThreadInfo(ProfilerFrameDataIterator iter, int frameIndex)
         {
             iter.SetRoot(frameIndex, 0);
             int threadCount = iter.GetThreadCount(frameIndex);
@@ -273,9 +329,10 @@ namespace UnityEditorInternal
                 GroupInfo group = m_Groups.Find(g => g.name == groupname);
                 if (group == null)
                 {
-                    group = new GroupInfo(groupname, m_Window.Repaint);
+                    group = new GroupInfo(groupname, RepaintProfilerWindow);
                     m_Groups.Add(group);
                 }
+
                 var threads = group.threads;
 
                 ThreadInfo thread = threads.Find(t => t.threadIndex == i);
@@ -283,6 +340,7 @@ namespace UnityEditorInternal
                 {
                     // ProfilerFrameDataIterator.maxDepth includes the thread sample which is not getting displayed, so we store it at -1 for all intents and purposes
                     thread = new ThreadInfo(iter.GetThreadName(), i, iter.maxDepth - 1, group.defaultLineCountPerThread);
+
                     // the main thread gets double the size
                     if (i == 0)
                         thread.linesToDisplay *= 2;
@@ -293,8 +351,10 @@ namespace UnityEditorInternal
                 {
                     thread.maxDepth = iter.maxDepth;
                 }
+
                 thread.alive = true;
             }
+
             foreach (var group in m_Groups)
             {
                 group.threads.Sort();
@@ -303,7 +363,7 @@ namespace UnityEditorInternal
             m_LastSelectedFrameID = frameIndex;
         }
 
-        private float CalculateHeightForAllBars(Rect fullRect, out float combinedHeaderHeight, out float combinedThreadHeight)
+        float CalculateHeightForAllBars(Rect fullRect, out float combinedHeaderHeight, out float combinedThreadHeight)
         {
             combinedHeaderHeight = 0f;
             combinedThreadHeight = 0f;
@@ -322,6 +382,7 @@ namespace UnityEditorInternal
                 {
                     group.height = group.expanded.value ? k_GroupHeight : Math.Max(group.height, group.threads.Count * k_ThreadMinHeightCollapsed);
                 }
+
                 combinedHeaderHeight += group.height;
 
                 foreach (var thread in group.threads)
@@ -335,7 +396,7 @@ namespace UnityEditorInternal
             return combinedHeaderHeight + combinedThreadHeight;
         }
 
-        private bool DrawBar(Rect r, float y, float height, string name, bool group, bool expanded, bool indent)
+        bool DrawBar(Rect r, float y, float height, string name, bool group, bool expanded, bool indent)
         {
             Rect leftRect = new Rect(r.x - Chart.kSideWidth, y, Chart.kSideWidth, height);
             Rect rightRect = new Rect(r.x, y, r.width, height);
@@ -349,6 +410,7 @@ namespace UnityEditorInternal
                 if (indent)
                     styles.leftPane.padding.left -= 10;
             }
+
             if (group)
             {
                 leftRect.width -= 1.0f; // text should not draw ontop of right border
@@ -356,10 +418,11 @@ namespace UnityEditorInternal
                 leftRect.yMin += 1.0f;
                 return GUI.Toggle(leftRect, expanded, GUIContent.none, styles.foldout);
             }
+
             return false;
         }
 
-        private void DrawBars(Rect r, float scaleForThreadHeight)
+        void DrawBars(Rect r, float scaleForThreadHeight)
         {
             bool hasThreadinfoToDraw = false;
             foreach (var group in m_Groups)
@@ -372,9 +435,11 @@ namespace UnityEditorInternal
                         break;
                     }
                 }
+
                 if (hasThreadinfoToDraw)
                     break;
             }
+
             if (!hasThreadinfoToDraw)
                 return; // nothing to draw
 
@@ -390,9 +455,10 @@ namespace UnityEditorInternal
 
                     if (newExpandedState != expandedState)
                     {
-                        SessionState.SetBool(groupInfo.name, newExpandedState);
+                        SessionState.SetBool($"Profiler.Timeline.GroupExpanded.{groupInfo.name}", newExpandedState);
                         groupInfo.expanded.value = newExpandedState;
                     }
+
                     y += height;
                 }
 
@@ -406,7 +472,7 @@ namespace UnityEditorInternal
             }
         }
 
-        void DoNativeProfilerTimeline(Rect r, int frameIndex, int threadIndex, float timeOffset, bool ghost, float scaleForThreadHeight)
+        void DoNativeProfilerTimeline(Rect r, int frameIndex, int maxContextFramesToShow, int threadIndex, float timeOffset, bool ghost, float scaleForThreadHeight)
         {
             // Add some margins to each thread view.
             Rect clipRect = r;
@@ -426,7 +492,7 @@ namespace UnityEditorInternal
                 }
                 else if (Event.current.type == EventType.MouseDown && !ghost) // Ghosts are not clickable
                 {
-                    HandleNativeProfilerTimelineInput(localRect, frameIndex, threadIndex, timeOffset, topMargin, scaleForThreadHeight);
+                    HandleNativeProfilerTimelineInput(localRect, frameIndex, maxContextFramesToShow, threadIndex, timeOffset, topMargin, scaleForThreadHeight);
                 }
             }
             GUI.EndGroup();
@@ -442,6 +508,7 @@ namespace UnityEditorInternal
             drawArgs.threadIndex = threadIndex;
             drawArgs.timeOffset = timeOffset;
             drawArgs.threadRect = threadRect;
+
             // cull text that would otherwise draw over the bottom scrollbar
             drawArgs.threadRect.yMax = Mathf.Min(drawArgs.threadRect.yMax, m_TimeArea.shownArea.height - m_TimeArea.hSliderHeight);
             drawArgs.shownAreaRect = m_TimeArea.shownArea;
@@ -451,7 +518,7 @@ namespace UnityEditorInternal
             NativeProfilerTimeline.Draw(ref drawArgs);
         }
 
-        void HandleNativeProfilerTimelineInput(Rect threadRect, int frameIndex, int threadIndex, float timeOffset, float topMargin, float scaleForThreadHeight)
+        void HandleNativeProfilerTimelineInput(Rect threadRect, int frameIndex, int maxContextFramesToShow, int threadIndex, float timeOffset, float topMargin, float scaleForThreadHeight)
         {
             // Only let this thread view change mouse state if it contained the mouse pos
             Rect clippedRect = threadRect;
@@ -502,7 +569,7 @@ namespace UnityEditorInternal
                     instanceInfoArgs.entryIndex = mouseOverIndex;
                     NativeProfilerTimeline.GetEntryInstanceInfo(ref instanceInfoArgs);
 
-                    m_Window.SetSelectedPropertyPath(instanceInfoArgs.out_Path);
+                    m_ProfilerWindow.SetSelectedPropertyPath(instanceInfoArgs.out_Path);
 
                     // Set selected entry info
                     m_SelectedEntry.Reset();
@@ -518,6 +585,16 @@ namespace UnityEditorInternal
                     m_SelectedEntry.name = posArgs.out_EntryName;
                     m_SelectedEntry.callstackInfo = instanceInfoArgs.out_CallstackInfo;
                     m_SelectedEntry.metaData = instanceInfoArgs.out_MetaData;
+
+                    if ((cpuModule.ViewOptions & CPUorGPUProfilerModule.ProfilerViewFilteringOptions.ShowExecutionFlow) != 0)
+                    {
+                        using (var frameData = ProfilerDriver.GetRawFrameDataView(frameIndex, threadIndex))
+                        {
+                            // posArgs.out_EntryIndex is a MeshCache index which differs from sample index by 1 as root is not included into MeshCache.
+                            frameData.GetSampleFlowEvents(mouseOverIndex + 1, m_SelectedEntry.FlowEvents);
+                            UpdateActiveFlowEventsForAllThreadsInAllVisibleFrames(frameIndex, maxContextFramesToShow, m_SelectedEntry.FlowEvents);
+                        }
+                    }
                 }
 
                 Event.current.Use();
@@ -538,7 +615,7 @@ namespace UnityEditorInternal
             }
         }
 
-        private void UpdateSelectedObject(bool singleClick, bool doubleClick)
+        void UpdateSelectedObject(bool singleClick, bool doubleClick)
         {
             var obj = EditorUtility.InstanceIDToObject(m_SelectedEntry.instanceId);
             if (obj is Component)
@@ -564,9 +641,9 @@ namespace UnityEditorInternal
             InitializeNativeTimeline();
         }
 
-        private void ClearSelection()
+        void ClearSelection()
         {
-            m_Window.ClearSelectedPropertyPath();
+            m_ProfilerWindow.ClearSelectedPropertyPath();
 
             m_SelectedEntry.Reset();
             m_RangeSelection.active = false;
@@ -577,7 +654,7 @@ namespace UnityEditorInternal
             PerformFrameSelected(frameMS, false, true);
         }
 
-        private void PerformFrameSelected(float frameMS, bool verticallyFrameSelected = true, bool hFrameAll = false)
+        void PerformFrameSelected(float frameMS, bool verticallyFrameSelected = true, bool hFrameAll = false)
         {
             float t;
             float dt;
@@ -620,6 +697,7 @@ namespace UnityEditorInternal
                                 break;
                             }
                         }
+
                         if (selectedThread != null)
                             break;
                     }
@@ -627,7 +705,7 @@ namespace UnityEditorInternal
                     if (selectedThread != null)
                     {
                         selectedThread.linesToDisplay = CalculateLineCount(m_SelectedEntry.relativeYPos + k_LineHeight);
-                        m_Window.Repaint();
+                        RepaintProfilerWindow();
                     }
                 }
 
@@ -643,16 +721,18 @@ namespace UnityEditorInternal
                     yMin = yMinPosition;
                     yMax = Mathf.Min(yMin + m_TimeArea.shownArea.height, m_TimeArea.vBaseRangeMax);
                 }
+
                 if (yMaxPosition > m_TimeArea.shownAreaInsideMargins.yMax - m_TimeArea.hSliderHeight)
                 {
                     yMax = yMaxPosition + m_TimeArea.hSliderHeight;
                     yMin = Mathf.Max(yMax - m_TimeArea.shownArea.height, m_TimeArea.vBaseRangeMin);
                 }
+
                 m_TimeArea.SetShownVRangeInsideMargins(yMin, yMax);
             }
         }
 
-        private void HandleFrameSelected(float frameMS)
+        void HandleFrameSelected(float frameMS)
         {
             Event evt = Event.current;
             if (evt.type == EventType.ValidateCommand || evt.type == EventType.ExecuteCommand)
@@ -667,6 +747,7 @@ namespace UnityEditorInternal
                     m_CurrentlyProcessedInputs |= ProcessedInputs.MouseDown | ProcessedInputs.FrameSelection;
                 }
             }
+
             if (evt.type == EventType.KeyDown && evt.keyCode == KeyCode.A)
             {
                 PerformFrameAll(frameMS);
@@ -674,42 +755,46 @@ namespace UnityEditorInternal
             }
         }
 
-        void DoProfilerFrame(int frameIndex, Rect fullRect, bool ghost, int threadCount, float offset, float scaleForThreadHeight)
+        void DoProfilerFrame(int frameIndex, int maxContextFramesToShow, Rect fullRect, bool ghost, int threadCount, float offset, float scaleForThreadHeight)
         {
-            var iter = new ProfilerFrameDataIterator();
-            int myThreadCount = iter.GetThreadCount(frameIndex);
-            if (ghost && myThreadCount != threadCount)
-                return;
-
-            iter.SetRoot(frameIndex, 0);
-
-            float y = fullRect.y;
-            // the unscaled y value equating to the timeline Y range value
-            float rangeY = 0;
-            foreach (var groupInfo in m_Groups)
+            using (var iter = new ProfilerFrameDataIterator())
             {
-                Rect r = fullRect;
-                var expanded = groupInfo.expanded.value;
-                if (expanded && groupInfo.threads.Count > 0)
-                {
-                    y += groupInfo.height;
-                    rangeY += groupInfo.height;
-                }
-                // When group is not expanded its header still occupies at least groupInfo.height
-                var notExpandedLeftOverY = groupInfo.height;
+                int myThreadCount = iter.GetThreadCount(frameIndex);
+                if (ghost && myThreadCount != threadCount)
+                    return;
 
-                var groupThreadCount = groupInfo.threads.Count;
-                foreach (var threadInfo in groupInfo.threads)
-                {
-                    r.y = y;
-                    r.height = expanded ? threadInfo.height * scaleForThreadHeight : Math.Max(groupInfo.height / groupThreadCount, k_ThreadMinHeightCollapsed);
+                iter.SetRoot(frameIndex, 0);
 
-                    var tr = r;
-                    tr.y -= fullRect.y;
-                    if (tr.yMin < m_TimeArea.shownArea.yMax && tr.yMax > m_TimeArea.shownArea.yMin)
+                float y = fullRect.y;
+
+                // the unscaled y value equating to the timeline Y range value
+                float rangeY = 0;
+                foreach (var groupInfo in m_Groups)
+                {
+                    Rect r = fullRect;
+                    var expanded = groupInfo.expanded.value;
+                    if (expanded && groupInfo.threads.Count > 0)
                     {
-                        iter.SetRoot(frameIndex, threadInfo.threadIndex);
-                        DoNativeProfilerTimeline(r, frameIndex, threadInfo.threadIndex, offset, ghost, scaleForThreadHeight);
+                        y += groupInfo.height;
+                        rangeY += groupInfo.height;
+                    }
+
+                    // When group is not expanded its header still occupies at least groupInfo.height
+                    var notExpandedLeftOverY = groupInfo.height;
+
+                    var groupThreadCount = groupInfo.threads.Count;
+                    foreach (var threadInfo in groupInfo.threads)
+                    {
+                        r.y = y;
+                        r.height = expanded ? threadInfo.height * scaleForThreadHeight : Math.Max(groupInfo.height / groupThreadCount, k_ThreadMinHeightCollapsed);
+
+                        var tr = r;
+                        tr.y -= fullRect.y;
+                        if (tr.yMin < m_TimeArea.shownArea.yMax && tr.yMax > m_TimeArea.shownArea.yMin)
+                        {
+                            iter.SetRoot(frameIndex, threadInfo.threadIndex);
+                            DoNativeProfilerTimeline(r, frameIndex, maxContextFramesToShow, threadInfo.threadIndex, offset, ghost, scaleForThreadHeight);
+                        }
 
                         // Save the y pos and height of the selected thread each time we draw, since it can change
                         bool containsSelected = m_SelectedEntry.IsValid() && (m_SelectedEntry.frameId == frameIndex) && (m_SelectedEntry.threadId == threadInfo.threadIndex);
@@ -719,12 +804,166 @@ namespace UnityEditorInternal
                             m_SelectedThreadYRange = rangeY;
                             m_SelectedThread = threadInfo;
                         }
+
+                        y += r.height;
+                        rangeY += r.height;
+                        notExpandedLeftOverY -= r.height;
                     }
 
-                    y += r.height;
-                    rangeY += r.height;
-                    notExpandedLeftOverY -= r.height;
+                    // Align next thread with the next group
+                    if (notExpandedLeftOverY > 0)
+                    {
+                        y += notExpandedLeftOverY;
+                        rangeY += notExpandedLeftOverY;
+                    }
                 }
+            }
+        }
+
+        void DoFlowEvents(int currentFrameIndex, int firstDrawnFrameIndex, int lastDrawnFrameIndex, Rect fullRect, float scaleForThreadHeight)
+        {
+            if ((cpuModule.ViewOptions & CPUorGPUProfilerModule.ProfilerViewFilteringOptions.ShowExecutionFlow) == 0)
+            {
+                return;
+            }
+
+            bool hasSelectedSampleWithFlowEvents = (m_SelectedEntry.FlowEvents.Count > 0) && SelectedSampleIsVisible(firstDrawnFrameIndex, lastDrawnFrameIndex);
+            FlowLinesDrawer activeFlowLinesDrawer = (hasSelectedSampleWithFlowEvents) ? new FlowLinesDrawer() : null;
+            ForEachThreadInEachGroup(fullRect, scaleForThreadHeight, (groupInfo, threadInfo, threadRect) =>
+            {
+                var groupIsExpanded = groupInfo.expanded.value;
+                DrawIndicatorsForAllFlowEventsInFrameOnThread(currentFrameIndex, threadInfo, threadRect, fullRect, groupIsExpanded, hasSelectedSampleWithFlowEvents);
+
+                if (hasSelectedSampleWithFlowEvents)
+                {
+                    ProcessActiveFlowEventsOnThread(ref activeFlowLinesDrawer, threadInfo, threadRect, fullRect, currentFrameIndex, groupIsExpanded);
+                }
+            });
+
+            activeFlowLinesDrawer?.Draw();
+        }
+
+        void DrawIndicatorsForAllFlowEventsInFrameOnThread(int currentFrameIndex, ThreadInfo threadInfo, Rect threadRect, Rect fullRect, bool groupIsExpanded, bool hasSelectedEntryWithFlowEvents)
+        {
+            m_SamplesWithDrawnFlowEventsPerThreadCache.Clear();
+
+            using (var frameData = ProfilerDriver.GetRawFrameDataView(currentFrameIndex, threadInfo.threadIndex))
+            {
+                frameData.GetFlowEvents(m_CachedThreadFlowEvents);
+
+                var localViewport = new Rect(Vector2.zero, fullRect.size);
+                var indicatorMode = (hasSelectedEntryWithFlowEvents) ? FlowIndicatorDrawer.IndicatorAppearanceMode.Inactive : FlowIndicatorDrawer.IndicatorAppearanceMode.NoActiveEvents;
+                foreach (var flowEvent in m_CachedThreadFlowEvents)
+                {
+                    if (flowEvent.ParentSampleIndex != 0)
+                    {
+                        // A sample can have multiple begin flow events. Check an indicator hasn't already been drawn for this sample on this thread.
+                        if (!SampleAlreadyHasFlowEventType(flowEvent.ParentSampleIndex, flowEvent.FlowEventType))
+                        {
+                            var sampleRect = RectForSampleOnFrameInThread(flowEvent.ParentSampleIndex, currentFrameIndex, threadInfo, threadRect, 0f, m_TimeArea.shownArea, (groupIsExpanded == false));
+                            if (sampleRect.Overlaps(localViewport))
+                            {
+                                FlowIndicatorDrawer.DrawFlowIndicatorForFlowEvent(flowEvent, sampleRect, indicatorMode);
+
+                                // A sample can only have multiple Begin flow events so only use the cache for begin events.
+                                if (flowEvent.FlowEventType == ProfilerFlowEventType.Begin)
+                                {
+                                    m_SamplesWithDrawnFlowEventsPerThreadCache.Add(flowEvent.ParentSampleIndex);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        void ProcessActiveFlowEventsOnThread(ref FlowLinesDrawer flowLinesDrawer, ThreadInfo threadInfo, Rect threadRect, Rect fullRect, int currentFrameIndex, bool groupIsExpanded)
+        {
+            foreach (var flowEventData in threadInfo.ActiveFlowEvents)
+            {
+                var flowEvent = flowEventData.flowEvent;
+                var flowEventFrameIndex = flowEventData.frameIndex;
+                var timeOffset = ProfilerFrameTimingUtility.TimeOffsetBetweenFrames(currentFrameIndex, flowEventData.frameIndex);
+                var sampleRect = RectForSampleOnFrameInThread(flowEvent.ParentSampleIndex, flowEventFrameIndex, threadInfo, threadRect, timeOffset, m_TimeArea.shownArea, (groupIsExpanded == false));
+
+                // A flow event can have no parent sample if it is not enclosed within a PROFILER_AUTO scope.
+                if (flowEventData.hasParentSampleIndex)
+                {
+                    // Add flow events to the 'flow lines drawer' for drawing later.
+                    bool isSelectedSample = false;
+                    if (!flowLinesDrawer.hasSelectedEventPosition)
+                    {
+                        isSelectedSample = (m_SelectedEntry.threadId == threadInfo.threadIndex) && (m_SelectedEntry.frameId == flowEventFrameIndex) && m_SelectedEntry.FlowEvents.Contains(flowEvent);
+                    }
+                    flowLinesDrawer.AddFlowEvent(flowEventData, threadInfo.threadIndex, sampleRect, isSelectedSample);
+
+                    // Draw indicator for this active flow event.
+                    var localViewport = new Rect(Vector2.zero, fullRect.size);
+                    if (sampleRect.Overlaps(localViewport))
+                    {
+                        FlowIndicatorDrawer.DrawFlowIndicatorForFlowEvent(flowEvent, sampleRect, FlowIndicatorDrawer.IndicatorAppearanceMode.Active);
+                    }
+                }
+            }
+        }
+
+        bool SampleAlreadyHasFlowEventType(int sampleIndex, ProfilerFlowEventType flowEventType)
+        {
+            // A sample can only have multiple Begin flow events.
+            if (flowEventType != ProfilerFlowEventType.Begin)
+            {
+                return false;
+            }
+
+            bool sampleAlreadyHasFlowEventType = false;
+            foreach (int parentSampleId in m_SamplesWithDrawnFlowEventsPerThreadCache)
+            {
+                if (sampleIndex == parentSampleId)
+                {
+                    sampleAlreadyHasFlowEventType = true;
+                    break;
+                }
+            }
+
+            return sampleAlreadyHasFlowEventType;
+        }
+
+        /// <summary>
+        /// Iterate over each group's threads and execute the provided <paramref name="action"/> for each thread. Passes the thread's rect to the provided action, calculated by summing all previous thread rects.
+        /// </summary>
+        /// <param name="fullRect"></param>
+        /// <param name="scaleForThreadHeight"></param>
+        /// <param name="action"></param>
+        void ForEachThreadInEachGroup(Rect fullRect, float scaleForThreadHeight, Action<GroupInfo, ThreadInfo, Rect> action)
+        {
+            float y = fullRect.y;
+            // The unscaled y value equating to the timeline Y range value.
+            float rangeY = 0;
+            foreach (var groupInfo in m_Groups)
+            {
+                var threadRect = fullRect;
+                var groupIsExpanded = groupInfo.expanded.value;
+                if (groupIsExpanded && groupInfo.threads.Count > 0)
+                {
+                    y += groupInfo.height;
+                    rangeY += groupInfo.height;
+                }
+
+                // When group is not expanded its header still occupies at least groupInfo.height.
+                var notExpandedLeftOverY = groupInfo.height;
+                var groupThreadCount = groupInfo.threads.Count;
+                foreach (var threadInfo in groupInfo.threads)
+                {
+                    threadRect.y = y;
+                    threadRect.height = groupIsExpanded ? threadInfo.height * scaleForThreadHeight : Math.Max(groupInfo.height / groupThreadCount, k_ThreadMinHeightCollapsed);
+
+                    action(groupInfo, threadInfo, threadRect);
+
+                    y += threadRect.height;
+                    rangeY += threadRect.height;
+                    notExpandedLeftOverY -= threadRect.height;
+                }
+
                 // Align next thread with the next group
                 if (notExpandedLeftOverY > 0)
                 {
@@ -732,6 +971,57 @@ namespace UnityEditorInternal
                     rangeY += notExpandedLeftOverY;
                 }
             }
+        }
+
+        Rect RectForSampleOnFrameInThread(int sampleIndex, int frameIndex, ThreadInfo threadInfo, Rect threadRect, float timeOffset, Rect shownAreaRect, bool isGroupCollapsed)
+        {
+            var positionInfoArgs = RawPositionInfoForSample(sampleIndex, frameIndex, threadInfo.threadIndex, threadRect, timeOffset, shownAreaRect);
+            CorrectRawPositionInfo(isGroupCollapsed, threadInfo, threadRect, ref positionInfoArgs);
+
+            var sampleRect = new Rect(new Vector2(positionInfoArgs.out_Position.x, positionInfoArgs.out_Position.y), positionInfoArgs.out_Size);
+            return sampleRect;
+        }
+
+        NativeProfilerTimeline_GetEntryPositionInfoArgs RawPositionInfoForSample(int sampleIndex, int frameIndex, int threadIndex, Rect threadRect, float timeOffset, Rect shownAreaRect)
+        {
+            var positionInfoArgs = new NativeProfilerTimeline_GetEntryPositionInfoArgs();
+            positionInfoArgs.Reset();
+            positionInfoArgs.frameIndex = frameIndex;
+            positionInfoArgs.threadIndex = threadIndex;
+            positionInfoArgs.sampleIndex = sampleIndex;
+            positionInfoArgs.timeOffset = timeOffset;
+            positionInfoArgs.threadRect = threadRect;
+            positionInfoArgs.shownAreaRect = shownAreaRect;
+
+            NativeProfilerTimeline.GetEntryPositionInfo(ref positionInfoArgs);
+
+            return positionInfoArgs;
+        }
+
+        // NativeProfilerTimeline.GetEntryPositionInfo appears to return rects relative to the thread rect. It also appears to not account for collapsed groups and threads.
+        void CorrectRawPositionInfo(bool isGroupCollapsed, ThreadInfo threadInfo, Rect threadRect, ref NativeProfilerTimeline_GetEntryPositionInfoArgs positionInfo)
+        {
+            // Offset the vertical position by the thread rect's vertical position.
+            positionInfo.out_Position.y += threadRect.y;
+
+            // If the group is collapsed, adjust the height to the thread rect's height.
+            if (isGroupCollapsed)
+            {
+                positionInfo.out_Size.y = threadRect.height;
+            }
+
+            // If the rect is below the bottom of the thread rect (i.e. the thread collapsed), clamp the rect to the bottom of the thread rect.
+            var positionInfoMaxY = positionInfo.out_Position.y + positionInfo.out_Size.y;
+            if (positionInfoMaxY > threadRect.yMax)
+            {
+                positionInfo.out_Position.y = threadRect.yMax;
+                positionInfo.out_Size.y = 0f;
+            }
+        }
+
+        bool SelectedSampleIsVisible(int firstDrawnFrameIndex, int lastDrawnFrameIndex)
+        {
+            return ((m_SelectedEntry.frameId >= firstDrawnFrameIndex) && (m_SelectedEntry.frameId <= lastDrawnFrameIndex));
         }
 
         void DoSelectionTooltip(int frameIndex, Rect fullRect)
@@ -765,8 +1055,10 @@ namespace UnityEditorInternal
             float selectedThreadYOffset = fullRect.y + m_SelectedThreadY;
             float selectedY = selectedThreadYOffset + m_SelectedEntry.relativeYPos;
             float maxYPosition = Mathf.Min(fullRect.yMax, selectedThreadYOffset + m_SelectedThread.height);
+
             // calculate how much of the line height is visible (needed for calculating the offset of the tooltip when flipping)
             float selectedLineHeightVisible = Mathf.Clamp(maxYPosition - (selectedY - k_LineHeight), 0, k_LineHeight);
+
             // keep the popup within the drawing area and thread rect
             selectedY = Mathf.Clamp(selectedY, fullRect.y, maxYPosition);
 
@@ -839,14 +1131,15 @@ namespace UnityEditorInternal
             GUI.EndClip();
         }
 
-        public void DoTimeRulerGUI(Rect timeRulerRect, float sideWidth, float frameTime)
+        void DoTimeRulerGUI(Rect timeRulerRect, float sideWidth, float frameTime)
         {
+            // m_TimeArea shouldn't ever be null when this method is called, but just to make sure in case the call to this changes.
+            if (Event.current.type != EventType.Repaint || m_TimeArea == null)
+                return;
+
             Rect sidebarLeftOfTimeRulerRect = new Rect(timeRulerRect.x - sideWidth, timeRulerRect.y, sideWidth, k_LineHeight);
             timeRulerRect.width -= m_TimeArea.vSliderWidth;
             Rect spaceRightOftimeRulerRect = new Rect(timeRulerRect.xMax, timeRulerRect.y, m_TimeArea.vSliderWidth, timeRulerRect.height);
-
-            if (m_TimeArea == null || Event.current.type != EventType.Repaint)
-                return;
 
             styles.leftPane.Draw(sidebarLeftOfTimeRulerRect, GUIContent.none, false, false, false, false);
 
@@ -922,6 +1215,7 @@ namespace UnityEditorInternal
                 time /= 1000;
                 format = k_TickFormatSeconds;
             }
+
             return UnityString.Format(format, time.ToString("N" + Mathf.Max(0, -log10), CultureInfo.InvariantCulture.NumberFormat));
         }
 
@@ -1022,9 +1316,11 @@ namespace UnityEditorInternal
                                 break;
                         }
                     }
+
                     threadHeight += thread.height;
                     lastThread = thread;
                 }
+
                 lastThreadInLastExpandedGroup = group.expanded.value ? lastThread : lastThreadInLastExpandedGroup;
                 lastExpandedGroup = group.expanded.value ? group : lastExpandedGroup;
             }
@@ -1049,7 +1345,7 @@ namespace UnityEditorInternal
             return Mathf.RoundToInt((threadHeight - k_ExtraHeightPerThread) / k_FullThreadLineHeight);
         }
 
-        private static bool CheckForExclusiveSplitterInput(ProcessedInputs inputs)
+        static bool CheckForExclusiveSplitterInput(ProcessedInputs inputs)
         {
             // check if there is a MouseDown event happening that is just moving a splitter and doing nothing else
             return inputs > 0 && (inputs & ProcessedInputs.SplitterMoving) > 0 && (inputs & ProcessedInputs.MouseDown) > 0 && inputs - (inputs & ProcessedInputs.SplitterMoving) - (inputs & ProcessedInputs.MouseDown) == 0;
@@ -1125,6 +1421,7 @@ namespace UnityEditorInternal
         {
             int roundedLineCount = Mathf.RoundToInt(thread.linesToDisplay);
             int defaultLineCountForThisThread = group.defaultLineCountPerThread * (group.name.Equals(k_MainGroupName) && thread.threadIndex == 0 ? 2 : 1);
+
             // only show the button if clicking it would change anything at all
             if (thread.maxDepth > defaultLineCountForThisThread || thread.maxDepth > roundedLineCount)
             {
@@ -1165,10 +1462,13 @@ namespace UnityEditorInternal
                                 {
                                     thread.linesToDisplay = group.defaultLineCountPerThread * (group.name.Equals(k_MainGroupName) && thread.threadIndex == 0 ? 2 : 1);
                                 }
+
                                 Event.current.Use();
+
                                 // the height just changed dramatically, enforce the new boundaries
                                 m_TimeArea.EnforceScaleAndRange();
                             }
+
                             break;
                         case HandleThreadSplitterFoldoutButtonsCommand.OnlyDraw:
                             if (Event.current.type == EventType.Repaint && expandOnButtonClick)
@@ -1176,6 +1476,7 @@ namespace UnityEditorInternal
                                 float height = styles.bottomShadow.CalcHeight(GUIContent.none, fullThreadsRectWithoutSidebar.width);
                                 styles.bottomShadow.Draw(new Rect(fullThreadsRectWithoutSidebar.x, threadYMax - height, fullThreadsRectWithoutSidebar.width, height), GUIContent.none, 0);
                             }
+
                             if (Event.current.type == EventType.Repaint)
                             {
                                 expandCollapseButtonStyle.Draw(expandCollapseButtonRect, GUIContent.none,
@@ -1187,218 +1488,236 @@ namespace UnityEditorInternal
                             break;
                     }
                 }
+
                 GUI.EndClip();
             }
         }
 
-        public void DoGUI(int frameIndex, Rect position)
+        public void DoGUI(int frameIndex, Rect position, bool fetchData, ref bool updateViewLive)
         {
-            var iter = new ProfilerFrameDataIterator();
-            int threadCount = iter.GetThreadCount(frameIndex);
-            iter.SetRoot(frameIndex, 0);
-
-            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-
-            DrawToolbar(iter);
-
-            EditorGUILayout.EndHorizontal();
-
-            using (m_DoGUIMarker.Auto())
+            using (var iter = fetchData ? new ProfilerFrameDataIterator() : null)
             {
-                if (!string.IsNullOrEmpty(dataAvailabilityMessage))
+                int threadCount = fetchData ? iter.GetThreadCount(frameIndex) : 0;
+                iter?.SetRoot(frameIndex, 0);
+
+                EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+
+                DrawToolbar(iter, ref updateViewLive);
+
+                EditorGUILayout.EndHorizontal();
+
+                using (m_DoGUIMarker.Auto())
                 {
-                    GUILayout.Label(dataAvailabilityMessage, BaseStyles.label);
-                    return;
-                }
-                if (threadCount == 0)
-                {
-                    GUILayout.Label(BaseStyles.noData, BaseStyles.label);
-                    return;
-                }
+                    if (!string.IsNullOrEmpty(dataAvailabilityMessage))
+                    {
+                        GUILayout.Label(dataAvailabilityMessage, BaseStyles.label);
+                        return;
+                    }
+                    else if (!fetchData && !updateViewLive)
+                    {
+                        GUILayout.Label(BaseStyles.liveUpdateMessage, BaseStyles.label);
+                        return;
+                    }
+                    if (threadCount == 0)
+                    {
+                        GUILayout.Label(BaseStyles.noData, BaseStyles.label);
+                        return;
+                    }
 
-                position.yMin -= 1; // Workaround: Adjust the y position as a temporary fix to a 1px vertical offset that need to be investigated.
-                Rect fullRect = position;
-                float sideWidth = Chart.kSideWidth;
+                    position.yMin -= 1; // Workaround: Adjust the y position as a temporary fix to a 1px vertical offset that need to be investigated.
+                    Rect fullRect = position;
+                    float sideWidth = Chart.kSideWidth;
 
-                Rect timeRulerRect = new Rect(fullRect.x + sideWidth, fullRect.y, fullRect.width - sideWidth, k_LineHeight);
+                    Rect timeRulerRect = new Rect(fullRect.x + sideWidth, fullRect.y, fullRect.width - sideWidth, k_LineHeight);
 
-                Rect timeAreaRect = new Rect(fullRect.x + sideWidth, fullRect.y + timeRulerRect.height, fullRect.width - sideWidth, fullRect.height - timeRulerRect.height);
+                    Rect timeAreaRect = new Rect(fullRect.x + sideWidth, fullRect.y + timeRulerRect.height, fullRect.width - sideWidth, fullRect.height - timeRulerRect.height);
 
-                bool initializing = false;
-                if (m_TimeArea == null)
-                {
-                    initializing = true;
-                    m_TimeArea = new ZoomableArea();
-                    m_TimeArea.hRangeLocked = false;
-                    m_TimeArea.vRangeLocked = false;
-                    m_TimeArea.hSlider = true;
-                    m_TimeArea.vSlider = true;
-                    m_TimeArea.vAllowExceedBaseRangeMax = false;
-                    m_TimeArea.vAllowExceedBaseRangeMin = false;
-                    m_TimeArea.hBaseRangeMin = 0;
-                    m_TimeArea.vBaseRangeMin = 0;
-                    m_TimeArea.vScaleMax = 1f;
-                    m_TimeArea.vScaleMin = 1f;
-                    m_TimeArea.scaleWithWindow = true;
-                    m_TimeArea.margin = 10;
-                    m_TimeArea.topmargin = 0;
-                    m_TimeArea.bottommargin = 0;
-                    m_TimeArea.upDirection = ZoomableArea.YDirection.Negative;
-                    m_TimeArea.vZoomLockedByDefault = true;
-                }
+                    bool initializing = false;
+                    if (m_TimeArea == null)
+                    {
+                        initializing = true;
+                        m_TimeArea = new ZoomableArea();
+                        m_TimeArea.hRangeLocked = false;
+                        m_TimeArea.vRangeLocked = false;
+                        m_TimeArea.hSlider = true;
+                        m_TimeArea.vSlider = true;
+                        m_TimeArea.vAllowExceedBaseRangeMax = false;
+                        m_TimeArea.vAllowExceedBaseRangeMin = false;
+                        m_TimeArea.hBaseRangeMin = 0;
+                        m_TimeArea.vBaseRangeMin = 0;
+                        m_TimeArea.vScaleMax = 1f;
+                        m_TimeArea.vScaleMin = 1f;
+                        m_TimeArea.scaleWithWindow = true;
+                        m_TimeArea.margin = 10;
+                        m_TimeArea.topmargin = 0;
+                        m_TimeArea.bottommargin = 0;
+                        m_TimeArea.upDirection = ZoomableArea.YDirection.Negative;
+                        m_TimeArea.vZoomLockedByDefault = true;
+                    }
 
-                m_TimeArea.rect = timeAreaRect;
+                    m_TimeArea.rect = timeAreaRect;
 
-                Rect bottomLeftFillRect = new Rect(0, position.yMax - m_TimeArea.vSliderWidth, sideWidth - 1, m_TimeArea.vSliderWidth);
+                    Rect bottomLeftFillRect = new Rect(0, position.yMax - m_TimeArea.vSliderWidth, sideWidth - 1, m_TimeArea.vSliderWidth);
 
-                if (Event.current.type == EventType.Repaint)
-                {
-                    styles.profilerGraphBackground.Draw(fullRect, false, false, false, false);
-                }
+                    if (Event.current.type == EventType.Repaint)
+                    {
+                        styles.profilerGraphBackground.Draw(fullRect, false, false, false, false);
+                    }
 
-                if (initializing)
-                {
-                    InitializeNativeTimeline();
-                }
-                // Prepare group and Thread Info
-                UpdateGroupAndThreadInfo(ref iter, frameIndex);
-                MarkDeadOrClearThread();
+                    if (initializing)
+                    {
+                        InitializeNativeTimeline();
+                    }
 
-                HandleFrameSelected(iter.frameTimeMS);
+                    // Prepare group and Thread Info
+                    UpdateGroupAndThreadInfo(iter, frameIndex);
+                    MarkDeadOrClearThread();
 
-                // update time area to new bounds
-                float combinedHeaderHeight, combinedThreadHeight;
-                float heightForAllBars = CalculateHeightForAllBars(fullRect, out combinedHeaderHeight, out combinedThreadHeight);
-                float emptySpaceBelowBars = k_LineHeight * 3f;
+                    HandleFrameSelected(iter.frameTimeMS);
 
-                // if needed, take up more empty space below, to fill up the ZoomableArea
-                emptySpaceBelowBars = Mathf.Max(emptySpaceBelowBars, timeAreaRect.height - heightForAllBars);
+                    // update time area to new bounds
+                    float combinedHeaderHeight, combinedThreadHeight;
+                    float heightForAllBars = CalculateHeightForAllBars(fullRect, out combinedHeaderHeight, out combinedThreadHeight);
+                    float emptySpaceBelowBars = k_LineHeight * 3f;
 
-                heightForAllBars += emptySpaceBelowBars;
+                    // if needed, take up more empty space below, to fill up the ZoomableArea
+                    emptySpaceBelowBars = Mathf.Max(emptySpaceBelowBars, timeAreaRect.height - m_TimeArea.hSliderHeight - heightForAllBars);
 
-                m_TimeArea.hBaseRangeMax = iter.frameTimeMS;
-                m_TimeArea.vBaseRangeMax = heightForAllBars;
+                    heightForAllBars += emptySpaceBelowBars;
 
-                if (Mathf.Abs(heightForAllBars - m_LastHeightForAllBars) >= 0.5f || Mathf.Abs(fullRect.height - m_LastFullRectHeight) >= 0.5f)
-                {
-                    m_LastHeightForAllBars = heightForAllBars;
-                    m_LastFullRectHeight = fullRect.height;
+                    m_TimeArea.hBaseRangeMax = iter.frameTimeMS;
+                    m_TimeArea.vBaseRangeMax = heightForAllBars;
 
-                    // set V range to enforce scale of 1 and to shift the shown area up in case the drawn area shrunk down
-                    m_TimeArea.SetShownVRange(m_TimeArea.shownArea.y, m_TimeArea.shownArea.y + m_TimeArea.drawRect.height);
-                }
+                    if (Mathf.Abs(heightForAllBars - m_LastHeightForAllBars) >= 0.5f || Mathf.Abs(fullRect.height - m_LastFullRectHeight) >= 0.5f)
+                    {
+                        m_LastHeightForAllBars = heightForAllBars;
+                        m_LastFullRectHeight = fullRect.height;
 
-                // frame the selection if needed and before drawing the time area
-                if (initializing)
-                    PerformFrameSelected(iter.frameTimeMS);
-                DoTimeRulerGUI(timeRulerRect, sideWidth, iter.frameTimeMS);
-                DoTimeArea();
+                        // set V range to enforce scale of 1 and to shift the shown area up in case the drawn area shrunk down
+                        m_TimeArea.SetShownVRange(m_TimeArea.shownArea.y, m_TimeArea.shownArea.y + m_TimeArea.drawRect.height);
+                    }
 
-                Rect fullThreadsRect = new Rect(fullRect.x, fullRect.y + timeRulerRect.height, fullRect.width - m_TimeArea.vSliderWidth, fullRect.height - timeRulerRect.height - m_TimeArea.hSliderHeight);
+                    // frame the selection if needed and before drawing the time area
+                    if (initializing)
+                        PerformFrameSelected(iter.frameTimeMS);
+                    DoTimeRulerGUI(timeRulerRect, sideWidth, iter.frameTimeMS);
+                    DoTimeArea();
 
-                Rect fullThreadsRectWithoutSidebar = fullThreadsRect;
-                fullThreadsRectWithoutSidebar.x += sideWidth;
-                fullThreadsRectWithoutSidebar.width -= sideWidth;
+                    Rect fullThreadsRect = new Rect(fullRect.x, fullRect.y + timeRulerRect.height, fullRect.width - m_TimeArea.vSliderWidth, fullRect.height - timeRulerRect.height - m_TimeArea.hSliderHeight);
 
-                // The splitters need to be handled after the time area so that they don't interfere with the input for panning/scrolling the ZoomableArea
-                DoThreadSplitters(fullThreadsRect, fullThreadsRectWithoutSidebar, frameIndex, ThreadSplitterCommand.HandleThreadSplitter);
+                    Rect fullThreadsRectWithoutSidebar = fullThreadsRect;
+                    fullThreadsRectWithoutSidebar.x += sideWidth;
+                    fullThreadsRectWithoutSidebar.width -= sideWidth;
 
-                Rect barsUIRect = m_TimeArea.drawRect;
+                    // The splitters need to be handled after the time area so that they don't interfere with the input for panning/scrolling the ZoomableArea
+                    DoThreadSplitters(fullThreadsRect, fullThreadsRectWithoutSidebar, frameIndex, ThreadSplitterCommand.HandleThreadSplitter);
 
-                DrawGrid(barsUIRect, iter.frameTimeMS);
+                    Rect barsUIRect = m_TimeArea.drawRect;
 
-                Rect barsAndSidebarUIRect = new Rect(barsUIRect.x - sideWidth, barsUIRect.y, barsUIRect.width + sideWidth, barsUIRect.height);
+                    DrawGrid(barsUIRect, iter.frameTimeMS);
 
-                if (Event.current.type == EventType.Repaint)
-                {
-                    Rect leftSideRect = new Rect(0, position.y, sideWidth, position.height);
+                    Rect barsAndSidebarUIRect = new Rect(barsUIRect.x - sideWidth, barsUIRect.y, barsUIRect.width + sideWidth, barsUIRect.height);
 
-                    styles.leftPane.Draw(leftSideRect, false, false, false, false);
-                    // The bar in the lower left side that fills the space next to the horizontal scrollbar.
-                    EditorStyles.toolbar.Draw(bottomLeftFillRect, false, false, false, false);
-                }
+                    if (Event.current.type == EventType.Repaint)
+                    {
+                        Rect leftSideRect = new Rect(0, position.y, sideWidth, position.height);
 
-                GUI.BeginClip(barsAndSidebarUIRect);
+                        styles.leftPane.Draw(leftSideRect, false, false, false, false);
 
-                Rect shownBarsUIRect = barsUIRect;
-                shownBarsUIRect.y = scrollOffsetY;
+                        // The bar in the lower left side that fills the space next to the horizontal scrollbar.
+                        EditorStyles.toolbar.Draw(bottomLeftFillRect, false, false, false, false);
+                    }
 
-                // since the scale is not applied to the group headers, there would be some height unaccounted for
-                // this calculation applies that height to the threads via scaleForThreadHeight
-                float heightUnaccountedForDueToNotScalingHeaders = m_TimeArea.scale.y * combinedHeaderHeight - combinedHeaderHeight;
-                float scaleForThreadHeight = (combinedThreadHeight * m_TimeArea.scale.y + heightUnaccountedForDueToNotScalingHeaders) / combinedThreadHeight;
+                    GUI.BeginClip(barsAndSidebarUIRect);
 
-                DrawBars(shownBarsUIRect, scaleForThreadHeight);
-                GUI.EndClip();
+                    Rect shownBarsUIRect = barsUIRect;
+                    shownBarsUIRect.y = scrollOffsetY;
 
-                DoRangeSelection(barsUIRect);
+                    // since the scale is not applied to the group headers, there would be some height unaccounted for
+                    // this calculation applies that height to the threads via scaleForThreadHeight
+                    float heightUnaccountedForDueToNotScalingHeaders = m_TimeArea.scale.y * combinedHeaderHeight - combinedHeaderHeight;
+                    float scaleForThreadHeight = (combinedThreadHeight * m_TimeArea.scale.y + heightUnaccountedForDueToNotScalingHeaders) / combinedThreadHeight;
 
-                GUI.BeginClip(barsUIRect);
-                shownBarsUIRect.x = 0;
+                    DrawBars(shownBarsUIRect, scaleForThreadHeight);
+                    GUI.EndClip();
 
-                bool oldEnabled = GUI.enabled;
-                GUI.enabled = false;
-                // Walk backwards to find how many previous frames we need to show.
-                int maxContextFramesToShow = m_Window.IsRecording() ? 1 : 3;
-                int numContextFramesToShow = maxContextFramesToShow;
-                int currentFrame = frameIndex;
-                float currentTime = 0;
-                do
-                {
-                    int prevFrame = ProfilerDriver.GetPreviousFrameIndex(currentFrame);
-                    if (prevFrame == -1)
-                        break;
-                    iter.SetRoot(prevFrame, 0);
-                    currentTime -= iter.frameTimeMS;
-                    currentFrame = prevFrame;
-                    --numContextFramesToShow;
-                }
-                while (currentTime > m_TimeArea.shownArea.x && numContextFramesToShow > 0);
+                    DoRangeSelection(barsUIRect);
 
-                // Draw previous frames
-                while (currentFrame != -1 && currentFrame != frameIndex)
-                {
-                    iter.SetRoot(currentFrame, 0);
-                    DoProfilerFrame(currentFrame, shownBarsUIRect, true, threadCount, currentTime, scaleForThreadHeight);
-                    currentTime += iter.frameTimeMS;
-                    currentFrame = ProfilerDriver.GetNextFrameIndex(currentFrame);
-                }
+                    GUI.BeginClip(barsUIRect);
+                    shownBarsUIRect.x = 0;
 
-                // Draw next frames
-                numContextFramesToShow = maxContextFramesToShow;
-                currentFrame = frameIndex;
-                currentTime = 0;
-                while (currentTime < m_TimeArea.shownArea.x + m_TimeArea.shownArea.width && numContextFramesToShow >= 0)
-                {
-                    if (frameIndex != currentFrame)
-                        DoProfilerFrame(currentFrame, shownBarsUIRect, true, threadCount, currentTime, scaleForThreadHeight);
-                    iter.SetRoot(currentFrame, 0);
-                    currentFrame = ProfilerDriver.GetNextFrameIndex(currentFrame);
-                    if (currentFrame == -1)
-                        break;
-                    currentTime += iter.frameTimeMS;
-                    --numContextFramesToShow;
-                }
+                    bool oldEnabled = GUI.enabled;
+                    GUI.enabled = false;
 
-                GUI.enabled = oldEnabled;
+                    // Walk backwards to find how many previous frames we need to show.
+                    int maxContextFramesToShow = m_ProfilerWindow.IsRecording() ? 1 : 3;
+                    int numContextFramesToShow = maxContextFramesToShow;
+                    int currentFrame = frameIndex;
+                    float currentTime = 0;
+                    do
+                    {
+                        int prevFrame = ProfilerDriver.GetPreviousFrameIndex(currentFrame);
+                        if (prevFrame == -1)
+                            break;
+                        iter.SetRoot(prevFrame, 0);
+                        currentTime -= iter.frameTimeMS;
+                        currentFrame = prevFrame;
+                        --numContextFramesToShow;
+                    }
+                    while (currentTime > m_TimeArea.shownArea.x && numContextFramesToShow > 0);
 
-                // Draw center frame last to get on top
-                threadCount = 0;
-                DoProfilerFrame(frameIndex, shownBarsUIRect, false, threadCount, 0, scaleForThreadHeight);
+                    // Draw previous frames
+                    int firstDrawnFrame = currentFrame;
+                    while (currentFrame != -1 && currentFrame != frameIndex)
+                    {
+                        iter.SetRoot(currentFrame, 0);
+                        DoProfilerFrame(currentFrame, maxContextFramesToShow, shownBarsUIRect, true, threadCount, currentTime, scaleForThreadHeight);
+                        currentTime += iter.frameTimeMS;
+                        currentFrame = ProfilerDriver.GetNextFrameIndex(currentFrame);
+                    }
 
-                GUI.EndClip();
+                    // Draw next frames
+                    numContextFramesToShow = maxContextFramesToShow;
+                    currentFrame = frameIndex;
+                    currentTime = 0;
+                    int lastDrawnFrame = currentFrame;
+                    while (currentTime < m_TimeArea.shownArea.x + m_TimeArea.shownArea.width && numContextFramesToShow >= 0)
+                    {
+                        if (frameIndex != currentFrame)
+                        {
+                            DoProfilerFrame(currentFrame, maxContextFramesToShow, shownBarsUIRect, true, threadCount, currentTime, scaleForThreadHeight);
+                            lastDrawnFrame = currentFrame;
+                        }
+                        iter.SetRoot(currentFrame, 0);
+                        currentFrame = ProfilerDriver.GetNextFrameIndex(currentFrame);
+                        if (currentFrame == -1)
+                            break;
+                        currentTime += iter.frameTimeMS;
+                        --numContextFramesToShow;
+                    }
 
-                // Draw Foldout Buttons on top of natively drawn bars
-                DoThreadSplitters(fullThreadsRect, fullThreadsRectWithoutSidebar, frameIndex, ThreadSplitterCommand.HandleThreadSplitterFoldoutButtons);
+                    GUI.enabled = oldEnabled;
 
-                // Draw tooltips on top of clip to be able to extend outside of timeline area
-                DoSelectionTooltip(frameIndex, m_TimeArea.drawRect);
+                    // Draw center frame last to get on top
+                    threadCount = 0;
+                    currentTime = 0;
+                    DoProfilerFrame(frameIndex, maxContextFramesToShow, shownBarsUIRect, false, threadCount, currentTime, scaleForThreadHeight);
+                    DoFlowEvents(frameIndex, firstDrawnFrame, lastDrawnFrame, shownBarsUIRect, scaleForThreadHeight);
 
-                if (Event.current.type == EventType.Repaint)
-                {
-                    // Reset all flags once Repaint finished on this view
-                    m_LastRepaintProcessedInputs = m_CurrentlyProcessedInputs;
-                    m_CurrentlyProcessedInputs = 0;
+                    GUI.EndClip();
+
+                    // Draw Foldout Buttons on top of natively drawn bars
+                    DoThreadSplitters(fullThreadsRect, fullThreadsRectWithoutSidebar, frameIndex, ThreadSplitterCommand.HandleThreadSplitterFoldoutButtons);
+
+                    // Draw tooltips on top of clip to be able to extend outside of timeline area
+                    DoSelectionTooltip(frameIndex, m_TimeArea.drawRect);
+
+                    if (Event.current.type == EventType.Repaint)
+                    {
+                        // Reset all flags once Repaint finished on this view
+                        m_LastRepaintProcessedInputs = m_CurrentlyProcessedInputs;
+                        m_CurrentlyProcessedInputs = 0;
+                    }
                 }
             }
         }
@@ -1443,6 +1762,7 @@ namespace UnityEditorInternal
                         m_RangeSelection.active = false;
                         m_CurrentlyProcessedInputs |= ProcessedInputs.MouseDown | ProcessedInputs.RangeSelection;
                     }
+
                     break;
 
                 case EventType.MouseDrag:
@@ -1473,9 +1793,11 @@ namespace UnityEditorInternal
                             m_RangeSelection.startTime = m_RangeSelection.mouseDownTime;
                             m_RangeSelection.endTime = cursorTime;
                         }
+
                         evt.Use();
                         m_CurrentlyProcessedInputs |= ProcessedInputs.MouseDown | ProcessedInputs.RangeSelection;
                     }
+
                     break;
 
                 case EventType.MouseUp:
@@ -1487,6 +1809,7 @@ namespace UnityEditorInternal
                         m_CurrentlyProcessedInputs -= (m_CurrentlyProcessedInputs & ProcessedInputs.MouseDown) | (m_CurrentlyProcessedInputs & ProcessedInputs.RangeSelection);
                         evt.Use();
                     }
+
                     break;
 
                 case EventType.Repaint:
@@ -1500,14 +1823,15 @@ namespace UnityEditorInternal
                         var selectionRect = Rect.MinMaxRect(Mathf.Max(rect.xMin, startPixel), rect.yMin, Mathf.Min(rect.xMax, endPixel), rect.yMax);
                         styles.rectangleToolSelection.Draw(selectionRect, false, false, false, false);
                     }
+
                     break;
             }
         }
 
-        internal void DrawToolbar(ProfilerFrameDataIterator frameDataIterator)
+        internal void DrawToolbar(ProfilerFrameDataIterator frameDataIterator, ref bool updateViewLive)
         {
-            if (frameDataIterator != null)
-                DrawViewTypePopup(ProfilerViewType.Timeline);
+            DrawViewTypePopup(ProfilerViewType.Timeline);
+            DrawLiveUpdateToggle(ref updateViewLive);
 
             GUILayout.FlexibleSpace();
 
@@ -1517,6 +1841,85 @@ namespace UnityEditorInternal
             GUILayout.FlexibleSpace();
 
             cpuModule?.DrawOptionsMenuPopup();
+        }
+
+        void UpdateActiveFlowEventsForAllThreadsInAllVisibleFrames(int frameIndex, int maximumNumberOfContextFramesToShow, List<RawFrameDataView.FlowEvent> activeFlowEvents)
+        {
+            if (activeFlowEvents.Count == 0)
+            {
+                return;
+            }
+
+            int firstContextFrame = IndexOfFirstContextFrame(frameIndex, maximumNumberOfContextFramesToShow);
+            int lastContextFrame = frameIndex + maximumNumberOfContextFramesToShow;
+            int currentFrame = firstContextFrame;
+            while ((currentFrame != -1) && (currentFrame <= lastContextFrame))
+            {
+                bool clearActiveFlowEvents = (currentFrame == firstContextFrame);
+                UpdateActiveFlowEventsForAllThreadsAtFrame(currentFrame, clearActiveFlowEvents, activeFlowEvents);
+
+                currentFrame = ProfilerDriver.GetNextFrameIndex(currentFrame);
+            }
+        }
+
+        int IndexOfFirstContextFrame(int currentFrame, int maximumNumberOfContextFramesToShow)
+        {
+            int firstVisibleContextFrameIndex = currentFrame;
+            do
+            {
+                int previousFrame = ProfilerDriver.GetPreviousFrameIndex(currentFrame);
+                if (previousFrame == -1)
+                {
+                    break;
+                }
+
+                firstVisibleContextFrameIndex = previousFrame;
+                maximumNumberOfContextFramesToShow--;
+            }
+            while (maximumNumberOfContextFramesToShow > 0);
+
+            return firstVisibleContextFrameIndex;
+        }
+
+        void UpdateActiveFlowEventsForAllThreadsAtFrame(int frameIndex, bool clearThreadActiveFlowEvents, List<RawFrameDataView.FlowEvent> activeFlowEvents)
+        {
+            foreach (var groupInfo in m_Groups)
+            {
+                foreach (var threadInfo in groupInfo.threads)
+                {
+                    if (clearThreadActiveFlowEvents)
+                    {
+                        threadInfo.ActiveFlowEvents.Clear();
+                    }
+
+                    using (var frameData = ProfilerDriver.GetRawFrameDataView(frameIndex, threadInfo.threadIndex))
+                    {
+                        frameData.GetFlowEvents(m_CachedThreadFlowEvents);
+                        foreach (var threadFlowEvent in m_CachedThreadFlowEvents)
+                        {
+                            bool existsInActiveFlowEvents = false;
+                            foreach (var activeFlowEvent in activeFlowEvents)
+                            {
+                                if (activeFlowEvent.FlowId == threadFlowEvent.FlowId)
+                                {
+                                    existsInActiveFlowEvents = true;
+                                    break;
+                                }
+                            }
+
+                            if (existsInActiveFlowEvents)
+                            {
+                                var flowEventData = new ThreadInfo.FlowEventData
+                                {
+                                    flowEvent = threadFlowEvent,
+                                    frameIndex = frameIndex
+                                };
+                                threadInfo.ActiveFlowEvents.Add(flowEventData);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

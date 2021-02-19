@@ -23,10 +23,12 @@ namespace Unity.Collections
         static int s_NativeLeakDetectionMode;
         const string kNativeLeakDetectionModePrefsString = "Unity.Colletions.NativeLeakDetection.Mode";
 
+        // Initialize leak detection on startup/domain reload to avoid NativeLeakDetection.Mode
+        // access on a job to trigger the initialization.
         [RuntimeInitializeOnLoadMethod]
         static void Initialize()
         {
-            s_NativeLeakDetectionMode = UnityEngine.PlayerPrefs.GetInt(kNativeLeakDetectionModePrefsString, (int)NativeLeakDetectionMode.Enabled);
+            s_NativeLeakDetectionMode = UnityEngine.PlayerPrefs.EditorPrefsGetInt(kNativeLeakDetectionModePrefsString, (int)NativeLeakDetectionMode.Enabled);
             if (s_NativeLeakDetectionMode < (int)NativeLeakDetectionMode.Disabled || s_NativeLeakDetectionMode > (int)NativeLeakDetectionMode.EnabledWithStackTrace)
                 s_NativeLeakDetectionMode = (int)NativeLeakDetectionMode.Enabled;
         }
@@ -45,7 +47,7 @@ namespace Unity.Collections
                 if (s_NativeLeakDetectionMode != intValue)
                 {
                     s_NativeLeakDetectionMode = intValue;
-                    UnityEngine.PlayerPrefs.SetInt(kNativeLeakDetectionModePrefsString, intValue);
+                    UnityEngine.PlayerPrefs.EditorPrefsSetInt(kNativeLeakDetectionModePrefsString, intValue);
                 }
             }
         }
@@ -74,7 +76,11 @@ namespace Unity.Collections.LowLevel.Unsafe
             // If the safety handle is for a temp allocation, create a new safety handle for this instance which can be marked as invalid
             // Setting it to new AtomicSafetyHandle is not enough since the handle needs a valid node pointer in order to give the correct errors
             if (AtomicSafetyHandle.IsTempMemoryHandle(safety))
+            {
+                int staticSafetyId = safety.staticSafetyId;
                 safety = AtomicSafetyHandle.Create();
+                safety.staticSafetyId = staticSafetyId;
+            }
             AtomicSafetyHandle.Release(safety);
             Clear(ref sentinel);
         }

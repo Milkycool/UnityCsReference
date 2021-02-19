@@ -21,7 +21,6 @@ namespace UnityEditor
         SerializedProperty m_ShadowBias;
         SerializedProperty m_MotionVectors;
         SerializedProperty m_Material;
-        SerializedProperty m_TrailMaterial;
         SerializedProperty m_SortingOrder;
         SerializedProperty m_SortingLayerID;
         SerializedProperty m_RenderingLayerMask;
@@ -92,7 +91,7 @@ namespace UnityEditor
             public GUIContent rotateWithStretchDirection = EditorGUIUtility.TrTextContent("Rotate With Stretch", "Rotate the particles based on the direction they are stretched in. This is added on top of other particle rotation.");
             public GUIContent sortingFudge = EditorGUIUtility.TrTextContent("Sorting Fudge", "Lower the number and most likely these particles will appear in front of other transparent objects, including other particles.");
             public GUIContent sortingFudgeDisabledDueToSortingGroup = EditorGUIUtility.TrTextContent("Sorting Fudge", "This is disabled as the Sorting Group component handles the sorting for this Renderer.");
-            public GUIContent sortMode = EditorGUIUtility.TrTextContent("Sort Mode", "The draw order of particles can be sorted by distance, oldest in front, or youngest in front.");
+            public GUIContent sortMode = EditorGUIUtility.TrTextContent("Sort Mode", "Draw order of the particles. They can be sorted by:\n- Distance (from the camera position)\n- Oldest particles in front\n- Youngest prticles in front\n- Depth (distance from the camera plane)");
             public GUIContent rotation = EditorGUIUtility.TrTextContent("Rotation", "Set whether the rotation of the particles is defined in Screen or World space.");
             public GUIContent castShadows = EditorGUIUtility.TrTextContent("Cast Shadows", "Only opaque materials cast shadows");
             public GUIContent receiveShadows = EditorGUIUtility.TrTextContent("Receive Shadows", "Only opaque materials receive shadows. When using deferred rendering, all opaque objects receive shadows.");
@@ -128,7 +127,8 @@ namespace UnityEditor
                 EditorGUIUtility.TrTextContent("None"),
                 EditorGUIUtility.TrTextContent("By Distance"),
                 EditorGUIUtility.TrTextContent("Oldest in Front"),
-                EditorGUIUtility.TrTextContent("Youngest in Front")
+                EditorGUIUtility.TrTextContent("Youngest in Front"),
+                EditorGUIUtility.TrTextContent("By Depth")
             };
 
             public GUIContent[] spaces = new GUIContent[]
@@ -194,7 +194,6 @@ namespace UnityEditor
             m_ShadowBias = GetProperty0("m_ShadowBias");
             m_MotionVectors = GetProperty0("m_MotionVectors");
             m_Material = GetProperty0("m_Materials.Array.data[0]");
-            m_TrailMaterial = GetProperty0("m_Materials.Array.data[1]");
             m_SortingOrder = GetProperty0("m_SortingOrder");
             m_RenderingLayerMask = GetProperty0("m_RenderingLayerMask");
             m_RendererPriority = GetProperty0("m_RendererPriority");
@@ -303,8 +302,9 @@ namespace UnityEditor
                     GUIObject(s_Texts.material, m_Material);
             }
 
-            if (m_TrailMaterial != null) // The renderer's material list could be empty
-                GUIObject(s_Texts.trailMaterial, m_TrailMaterial);
+            var trailMaterial = serializedObject.FindProperty("m_Materials.Array.data[1]"); // Optional - may fail
+            if (trailMaterial != null) // Only show if the system has a second material slot
+                GUIObject(s_Texts.trailMaterial, trailMaterial);
 
             if (renderMode != RenderMode.None)
             {
@@ -354,7 +354,7 @@ namespace UnityEditor
                     if (renderMode == RenderMode.Billboard)
                         GUIToggle(s_Texts.allowRoll, m_AllowRoll);
 
-                    if (renderMode == RenderMode.Mesh)
+                    if (renderMode == RenderMode.Mesh && SupportedRenderingFeatures.active.particleSystemInstancing)
                         GUIToggle(s_Texts.enableGPUInstancing, m_EnableGPUInstancing);
                 }
 

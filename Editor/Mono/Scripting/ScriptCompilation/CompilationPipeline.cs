@@ -25,6 +25,10 @@ namespace UnityEditor.Compilation
     public class ScriptCompilerOptions
     {
         public bool AllowUnsafeCode { get; set; }
+        public bool EmitReferenceAssembly { get; set; }
+
+        internal bool UseDeterministicCompilation { get; set; }
+
         public CodeOptimization CodeOptimization { get; set; }
         public ApiCompatibilityLevel ApiCompatibilityLevel { get; set; }
         public string[] ResponseFiles { get; set; }
@@ -60,6 +64,7 @@ namespace UnityEditor.Compilation
     public class Assembly
     {
         public string name { get; private set; }
+        public string rootNamespace { get; private set; }
         public string outputPath { get; private set; }
         public string[] sourceFiles { get; private set; }
         public string[] defines { get; private set; }
@@ -84,7 +89,8 @@ namespace UnityEditor.Compilation
             assemblyReferences,
             compiledAssemblyReferences,
             flags,
-            new ScriptCompilerOptions())
+            new ScriptCompilerOptions(),
+            string.Empty)
         {
         }
 
@@ -96,6 +102,27 @@ namespace UnityEditor.Compilation
                         string[] compiledAssemblyReferences,
                         AssemblyFlags flags,
                         ScriptCompilerOptions compilerOptions)
+            : this(name,
+            outputPath,
+            sourceFiles,
+            defines,
+            assemblyReferences,
+            compiledAssemblyReferences,
+            flags,
+            compilerOptions,
+            string.Empty)
+        {
+        }
+
+        public Assembly(string name,
+                        string outputPath,
+                        string[] sourceFiles,
+                        string[] defines,
+                        Assembly[] assemblyReferences,
+                        string[] compiledAssemblyReferences,
+                        AssemblyFlags flags,
+                        ScriptCompilerOptions compilerOptions,
+                        string rootNamespace)
         {
             this.name = name;
             this.outputPath = outputPath;
@@ -105,6 +132,7 @@ namespace UnityEditor.Compilation
             this.compiledAssemblyReferences = compiledAssemblyReferences;
             this.flags = flags;
             this.compilerOptions = compilerOptions;
+            this.rootNamespace = rootNamespace;
         }
     }
 
@@ -220,12 +248,12 @@ namespace UnityEditor.Compilation
                 }
             };
 
-            editorCompilation.assemblyCompilationFinished += (assemblyPath, messages) =>
+            editorCompilation.assemblyCompilationFinished += (assembly, messages, editorScriptCompilationSettings) =>
             {
                 try
                 {
                     if (assemblyCompilationFinished != null)
-                        assemblyCompilationFinished(assemblyPath, messages);
+                        assemblyCompilationFinished(assembly.FullPath, messages);
                 }
                 catch (Exception e)
                 {
@@ -309,6 +337,12 @@ namespace UnityEditor.Compilation
             return GUIDReference.GUIDReferenceToGUID(reference);
         }
 
+        public static string GetAssemblyRootNamespaceFromScriptPath(string sourceFilePath)
+        {
+            var projectRootNamespace = UnityEditor.EditorSettings.projectGenerationRootNamespace;
+            return GetAssemblyRootNamespaceFromScriptPath(EditorCompilationInterface.Instance, projectRootNamespace, sourceFilePath);
+        }
+
         public static AssemblyDefinitionPlatform[] GetAssemblyDefinitionPlatforms()
         {
             if (assemblyDefinitionPlatforms == null)
@@ -340,15 +374,15 @@ namespace UnityEditor.Compilation
 
         public static string[] GetPrecompiledAssemblyNames()
         {
-            return GetPrecompiledAssemblyNames(EditorCompilationInterface.Instance);
+            var precompiledAssemblyProvider = EditorCompilationInterface.Instance.PrecompiledAssemblyProvider;
+            return GetPrecompiledAssemblyNames(precompiledAssemblyProvider);
         }
 
-        internal static string[] GetPrecompiledAssemblyNames(EditorCompilation editorCompilation)
+        internal static string[] GetPrecompiledAssemblyNames(PrecompiledAssemblyProviderBase precompiledAssemblyProvider)
         {
-            return editorCompilation.GetAllPrecompiledAssemblies()
+            return precompiledAssemblyProvider.GetPrecompiledAssemblies(true, EditorUserBuildSettings.activeBuildTargetGroup, EditorUserBuildSettings.activeBuildTarget)
                 .Where(x => (x.Flags & sc.AssemblyFlags.UserAssembly) == sc.AssemblyFlags.UserAssembly)
                 .Select(x => AssetPath.GetFileName(x.Path))
-                .Distinct()
                 .ToArray();
         }
 
@@ -369,10 +403,11 @@ namespace UnityEditor.Compilation
 
         public static string[] GetPrecompiledAssemblyPaths(PrecompiledAssemblySources precompiledAssemblySources)
         {
-            return GetPrecompiledAssemblyPaths(EditorCompilationInterface.Instance, precompiledAssemblySources);
+            var precompiledAssemblyProvider = EditorCompilationInterface.Instance.PrecompiledAssemblyProvider;
+            return GetPrecompiledAssemblyPaths(precompiledAssemblySources, precompiledAssemblyProvider);
         }
 
-        internal static string[] GetPrecompiledAssemblyPaths(EditorCompilation editorCompilation, PrecompiledAssemblySources precompiledAssemblySources)
+        internal static string[] GetPrecompiledAssemblyPaths(PrecompiledAssemblySources precompiledAssemblySources, PrecompiledAssemblyProviderBase precompiledAssemblyProvider)
         {
             HashSet<string> assemblyNames = new HashSet<string>();
             sc.AssemblyFlags flags = sc.AssemblyFlags.None;
@@ -393,7 +428,7 @@ namespace UnityEditor.Compilation
             if ((precompiledAssemblySources & PrecompiledAssemblySources.UserAssembly) != 0)
                 flags |= sc.AssemblyFlags.UserAssembly;
 
-            var precompiledAssemblies = editorCompilation.GetAllPrecompiledAssemblies().Concat(EditorCompilationInterface.Instance.GetUnityAssemblies());
+            var precompiledAssemblies = precompiledAssemblyProvider.GetPrecompiledAssemblies(true, EditorUserBuildSettings.activeBuildTargetGroup, EditorUserBuildSettings.activeBuildTarget).Concat(EditorCompilationInterface.Instance.GetUnityAssemblies());
             foreach (var a in precompiledAssemblies.Where(x => (x.Flags & flags) != 0))
                 assemblyNames.Add(a.Path);
 
@@ -402,17 +437,20 @@ namespace UnityEditor.Compilation
 
         public static string GetPrecompiledAssemblyPathFromAssemblyName(string assemblyName)
         {
-            return GetPrecompiledAssemblyPathFromAssemblyName(assemblyName, EditorCompilationInterface.Instance);
+            var precompiledAssemblyProvider = EditorCompilationInterface.Instance.PrecompiledAssemblyProvider;
+            return GetPrecompiledAssemblyPathFromAssemblyName(assemblyName, precompiledAssemblyProvider);
         }
 
-        internal static string GetPrecompiledAssemblyPathFromAssemblyName(string assemblyName, EditorCompilation editorCompilation)
+        internal static string GetPrecompiledAssemblyPathFromAssemblyName(string assemblyName, PrecompiledAssemblyProviderBase precompiledAssemblyProvider)
         {
-            var precompiledAssembliesWithName = editorCompilation.GetAllPrecompiledAssemblies()
-                .Where(x => AssetPath.GetFileName(x.Path) == assemblyName  && (x.Flags & sc.AssemblyFlags.UserAssembly) == sc.AssemblyFlags.UserAssembly);
+            var precompiledAssemblies = precompiledAssemblyProvider.GetPrecompiledAssemblies(true, EditorUserBuildSettings.activeBuildTargetGroup, EditorUserBuildSettings.activeBuildTarget);
 
-            if (precompiledAssembliesWithName.Any())
+            foreach (var assembly in precompiledAssemblies)
             {
-                return precompiledAssembliesWithName.Single().Path;
+                if ((assembly.Flags & sc.AssemblyFlags.UserAssembly) == sc.AssemblyFlags.UserAssembly && AssetPath.GetFileName(assembly.Path) == assemblyName)
+                {
+                    return assembly.Path;
+                }
             }
             return null;
         }
@@ -429,7 +467,7 @@ namespace UnityEditor.Compilation
             var target = EditorUserBuildSettings.activeBuildTarget;
 
             PrecompiledAssembly[] unityAssemblies = InternalEditorUtility.GetUnityAssemblies(false, group, target);
-            PrecompiledAssembly[] precompiledAssemblies = InternalEditorUtility.GetPrecompiledAssemblies(false, group, target);
+            var precompiledAssemblies = EditorCompilationInterface.Instance.PrecompiledAssemblyProvider.GetPrecompiledAssembliesDictionary(false, group, target);
 
             var scriptAssemblies = editorCompilation.GetAllScriptAssemblies(options, unityAssemblies, precompiledAssemblies, defines);
             return ToAssemblies(scriptAssemblies);
@@ -464,7 +502,8 @@ namespace UnityEditor.Compilation
                     null,
                     compiledAssemblyReferences,
                     flags,
-                    compilerOptions);
+                    compilerOptions,
+                    scriptAssembly.RootNamespace);
             }
 
             var scriptAssemblyToAssembly = new Dictionary<ScriptAssembly, Assembly>();
@@ -532,6 +571,19 @@ namespace UnityEditor.Compilation
             {
                 var customScriptAssembly = editorCompilation.FindCustomScriptAssemblyFromAssemblyReference(reference);
                 return customScriptAssembly.FilePath;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        internal static string GetAssemblyRootNamespaceFromScriptPath(EditorCompilation editorCompilation, string projectRootNamespace, string sourceFilePath)
+        {
+            try
+            {
+                var csa = editorCompilation.FindCustomScriptAssemblyFromScriptPath(sourceFilePath);
+                return csa != null ? csa.RootNamespace : projectRootNamespace;
             }
             catch (Exception)
             {

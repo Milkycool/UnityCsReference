@@ -17,9 +17,12 @@ namespace UnityEditor.Connect
         public override string description { get; }
         public override string pathTowardIcon { get; }
         public override string projectSettingsPath { get; }
+        public override string settingsProviderClassName => nameof(CloudDiagProjectSettings);
         public override bool displayToggle { get; }
         public override Notification.Topic notificationTopic => Notification.Topic.CrashService;
-        public override string packageId { get; }
+        public override string packageName { get; }
+        public override string serviceFlagName { get; }
+        public override bool shouldSyncOnProjectRebind => true;
 
         static readonly CrashService k_Instance;
 
@@ -40,7 +43,8 @@ namespace UnityEditor.Connect
             pathTowardIcon = @"Builtin Skins\Shared\Images\ServicesWindow-ServiceIcon-Crash.png";
             projectSettingsPath = "Project/Services/Cloud Diagnostics";
             displayToggle = false;
-            packageId = null;
+            packageName = null;
+            serviceFlagName = "gameperf";
             ServicesRepository.AddService(this);
         }
 
@@ -49,7 +53,7 @@ namespace UnityEditor.Connect
             return CrashReportingSettings.enabled;
         }
 
-        protected override void InternalEnableService(bool enable)
+        protected override void InternalEnableService(bool enable, bool shouldUpdateApiFlag)
         {
             if (CrashReportingSettings.enabled != enable)
             {
@@ -57,7 +61,7 @@ namespace UnityEditor.Connect
                 EditorAnalytics.SendEventServiceInfo(new CrashServiceState() { crash_reporting = enable });
             }
 
-            base.InternalEnableService(enable);
+            base.InternalEnableService(enable, shouldUpdateApiFlag);
         }
     }
 }

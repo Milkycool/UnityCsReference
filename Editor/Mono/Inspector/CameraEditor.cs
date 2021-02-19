@@ -35,7 +35,7 @@ namespace UnityEditor
             public static GUIContent cameraType = EditorGUIUtility.TrTextContent("Sensor Type", "Common sensor sizes. Choose an item to set Sensor Size, or edit Sensor Size for your custom settings.");
             public static GUIContent renderingPath = EditorGUIUtility.TrTextContent("Rendering Path", "Choose a rendering method for this camera.\n\nUse Graphics Settings to use the rendering path specified in Player settings.\n\nUse Forward to render all objects with one pass per material.\n\nUse Deferred to draw all objects once without lighting and then draw the lighting of all objects at the end of the render queue.\n\nUse Legacy Vertex Lit to render all lights in a single pass, calculated in vertices.\n\nLegacy Deferred has been deprecated.");
             public static GUIContent focalLength = EditorGUIUtility.TrTextContent("Focal Length", "The simulated distance between the lens and the sensor of the physical camera. Larger values give a narrower field of view.");
-            public static GUIContent allowOcclusionCulling = EditorGUIUtility.TrTextContent("Occlusion Culling", "Occlusion Culling means that objects that are hidden behind other objects are not rendered, for example if they are behind walls.");
+            public static GUIContent allowOcclusionCulling = EditorGUIUtility.TrTextContent("Occlusion Culling", "Occlusion Culling disables rendering of objects when they are not currently seen by the camera because they are obscured (occluded) by other objects.");
             public static GUIContent allowHDR = EditorGUIUtility.TrTextContent("HDR", "High Dynamic Range gives you a wider range of light intensities, so your lighting looks more realistic. With it, you can still see details and experience less saturation even with bright light.");
             public static GUIContent allowMSAA = EditorGUIUtility.TrTextContent("MSAA", "Use Multi Sample Anti-aliasing to reduce aliasing.");
             public static GUIContent gateFit = EditorGUIUtility.TrTextContent("Gate Fit", "Determines how the rendered area (resolution gate) fits into the sensor area (film gate).");
@@ -470,6 +470,8 @@ namespace UnityEditor
 
         private RenderTexture m_PreviewTexture;
 
+        int m_QualitySettingsAntiAliasing = -1;
+
         // should match color in GizmosDrawers.cpp
         private const float kPreviewNormalizedSize = 0.2f;
 
@@ -523,7 +525,7 @@ namespace UnityEditor
             m_ShowTargetEyeOption.valueChanged.AddListener(Repaint);
 
             SubsystemManager.GetSubsystemDescriptors(displayDescriptors);
-            SubsystemManager.reloadSubsytemsCompleted += OnReloadSubsystemsComplete;
+            SubsystemManager.afterReloadSubsystems += OnReloadSubsystemsComplete;
 
             SceneView.duringSceneGui += DuringSceneGUI;
 
@@ -535,7 +537,7 @@ namespace UnityEditor
             }
         }
 
-        internal void OnDisable()
+        public void OnDisable()
         {
             m_ShowBGColorOptions.valueChanged.RemoveListener(Repaint);
             m_ShowOrthoOptions.valueChanged.RemoveListener(Repaint);
@@ -786,7 +788,6 @@ namespace UnityEditor
             {
                 // setup camera and render
                 previewCamera.CopyFrom(c);
-                previewCamera.cameraType = CameraType.Preview;
 
                 // make sure the preview camera is rendering the same stage as the SceneView is
                 if (sceneView.overrideSceneCullingMask != 0)
@@ -834,9 +835,10 @@ namespace UnityEditor
 
         private RenderTexture GetPreviewTextureWithSize(int width, int height)
         {
-            if (m_PreviewTexture == null || m_PreviewTexture.width != width || m_PreviewTexture.height != height)
+            if (m_PreviewTexture == null || m_PreviewTexture.width != width || m_PreviewTexture.height != height || m_QualitySettingsAntiAliasing != QualitySettings.antiAliasing)
             {
                 m_PreviewTexture = new RenderTexture(width, height, 24, SystemInfo.GetGraphicsFormat(DefaultFormat.LDR));
+                m_QualitySettingsAntiAliasing = QualitySettings.antiAliasing;
             }
             return m_PreviewTexture;
         }

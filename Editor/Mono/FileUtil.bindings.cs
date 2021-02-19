@@ -106,16 +106,16 @@ namespace UnityEditor
         [FreeFunction]
         public static extern string GetProjectRelativePath(string path);
 
-        [FreeFunction]
+        [FreeFunction(Name = "GetLastPathNameComponentManaged")]
         internal static extern string GetLastPathNameComponent(string path);
 
-        [FreeFunction]
+        [FreeFunction(Name = "DeleteLastPathNameComponentManaged")]
         internal static extern string DeleteLastPathNameComponent(string path);
 
-        [FreeFunction("GetPathNameExtension")]
+        [FreeFunction("GetPathNameExtensionManaged")]
         internal static extern string GetPathExtension(string path);
 
-        [FreeFunction("DeletePathNameExtension")]
+        [FreeFunction("DeletePathNameExtensionManaged")]
         internal static extern string GetPathWithoutExtension(string path);
 
         [FreeFunction]
@@ -146,7 +146,7 @@ namespace UnityEditor
         }
 
         // transform path to absolute, resolving mount points
-        [FreeFunction]
+        [FreeFunction("PathToAbsolutePathFromScript")]
         extern internal static string PathToAbsolutePath(string path);
     }
 }

@@ -5,14 +5,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using UnityEditor.Connect;
 using UnityEditorInternal;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEngine.Networking;
 using Button = UnityEngine.UIElements.Button;
 
-namespace UnityEditor.Mono.UnityConnect.Services
+namespace UnityEditor.Connect
 {
     class AnalyticsProjectSettings : ServicesProjectSettings
     {
@@ -176,7 +175,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
             {
                 var clickable = new Clickable(() =>
                 {
-                    OpenDashboardForProjectGuid(ServicesConfiguration.instance.baseAnalyticsDashboardUrl);
+                    ServicesConfiguration.instance.RequestBaseAnalyticsDashboardUrl(OpenDashboardForProjectGuid);
                 });
                 m_GoToDashboard.AddManipulator(clickable);
             }
@@ -189,13 +188,8 @@ namespace UnityEditor.Mono.UnityConnect.Services
         void SetupServiceToggle(SingleService singleService)
         {
             m_MainServiceToggle.SetProperty(k_ServiceNameProperty, singleService.name);
-            m_MainServiceToggle.SetValueWithoutNotify(singleService.IsServiceEnabled());
-            SetupServiceToggleLabel(m_MainServiceToggle, singleService.IsServiceEnabled());
             m_MainServiceToggle.SetEnabled(false);
-            if (m_GoToDashboard != null)
-            {
-                m_GoToDashboard.style.display = (singleService.IsServiceEnabled()) ? DisplayStyle.Flex : DisplayStyle.None;
-            }
+            UpdateServiceToggleAndDashboardLink(singleService.IsServiceEnabled());
 
             if (singleService.displayToggle)
             {
@@ -203,21 +197,29 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 {
                     if (currentUserPermission != UserRole.Owner && currentUserPermission != UserRole.Manager)
                     {
-                        m_MainServiceToggle.SetValueWithoutNotify(evt.previousValue);
-                        SetupServiceToggleLabel(m_MainServiceToggle, evt.previousValue);
+                        UpdateServiceToggleAndDashboardLink(evt.previousValue);
                         return;
                     }
-                    SetupServiceToggleLabel(m_MainServiceToggle, evt.newValue);
                     singleService.EnableService(evt.newValue);
-                    if (m_GoToDashboard != null)
-                    {
-                        m_GoToDashboard.style.display = (evt.newValue) ? DisplayStyle.Flex : DisplayStyle.None;
-                    }
                 });
             }
             else
             {
                 m_MainServiceToggle.style.display = DisplayStyle.None;
+            }
+        }
+
+        void UpdateServiceToggleAndDashboardLink(bool isEnabled)
+        {
+            if (m_GoToDashboard != null)
+            {
+                m_GoToDashboard.style.display = (isEnabled) ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            if (m_MainServiceToggle != null)
+            {
+                m_MainServiceToggle.SetValueWithoutNotify(isEnabled);
+                SetupServiceToggleLabel(m_MainServiceToggle, isEnabled);
             }
         }
 
@@ -403,6 +405,8 @@ namespace UnityEditor.Mono.UnityConnect.Services
                     scrollContainer.Clear();
                     scrollContainer.Add(generalTemplate.CloneTree().contentContainer);
                     ServicesUtils.TranslateStringsInTree(provider.rootVisualElement);
+
+                    provider.UpdateServiceToggleAndDashboardLink(provider.serviceInstance.IsServiceEnabled());
                 }
             }
 
@@ -509,7 +513,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
                     {
                         var clickable = new Clickable(() =>
                         {
-                            provider.OpenDashboardForProjectGuid(ServicesConfiguration.instance.baseAnalyticsDashboardUrl);
+                            ServicesConfiguration.instance.RequestBaseAnalyticsDashboardUrl(provider.OpenDashboardForProjectGuid);
                         });
                         accessDashboard.AddManipulator(clickable);
                     }
@@ -654,7 +658,7 @@ namespace UnityEditor.Mono.UnityConnect.Services
                 {
                     var goToDashboard = new Clickable(() =>
                     {
-                        provider.OpenDashboardForProjectGuid(ServicesConfiguration.instance.baseAnalyticsDashboardUrl);
+                        ServicesConfiguration.instance.RequestBaseAnalyticsDashboardUrl(provider.OpenDashboardForProjectGuid);
                     });
 
                     welcomeBlock.Q(k_DashboardButton).AddManipulator(goToDashboard);

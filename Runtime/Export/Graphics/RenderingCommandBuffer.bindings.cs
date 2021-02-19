@@ -36,6 +36,9 @@ namespace UnityEngine.Rendering
             ConvertTexture_Internal(src, srcElement, dst, dstElement);
         }
 
+        [NativeMethod("AddWaitAllAsyncReadbackRequests")]
+        public extern void WaitAllAsyncReadbackRequests();
+
         public void RequestAsyncReadback(ComputeBuffer src, Action<AsyncGPUReadbackRequest> callback)
         {
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
@@ -140,7 +143,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_1(src, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_1(src, callback, &data);
             }
         }
 
@@ -149,7 +153,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_2(src, size, offset, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_2(src, size, offset, callback, &data);
             }
         }
 
@@ -158,7 +163,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_8(src, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_8(src, callback, &data);
             }
         }
 
@@ -167,7 +173,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_9(src, size, offset, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_9(src, size, offset, callback, &data);
             }
         }
 
@@ -176,7 +183,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_3(src, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_3(src, callback, &data);
             }
         }
 
@@ -185,7 +193,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_4(src, mipIndex, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_4(src, mipIndex, callback, &data);
             }
         }
 
@@ -194,7 +203,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_5(src, mipIndex, GraphicsFormatUtility.GetGraphicsFormat(dstFormat, QualitySettings.activeColorSpace == ColorSpace.Linear), callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_5(src, mipIndex, GraphicsFormatUtility.GetGraphicsFormat(dstFormat, QualitySettings.activeColorSpace == ColorSpace.Linear), callback, &data);
             }
         }
 
@@ -203,7 +213,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_5(src, mipIndex, dstFormat, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_5(src, mipIndex, dstFormat, callback, &data);
             }
         }
 
@@ -212,7 +223,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_6(src, mipIndex, x, width, y, height, z, depth, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_6(src, mipIndex, x, width, y, height, z, depth, callback, &data);
             }
         }
 
@@ -221,7 +233,8 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_7(src, mipIndex, x, width, y, height, z, depth, GraphicsFormatUtility.GetGraphicsFormat(dstFormat, QualitySettings.activeColorSpace == ColorSpace.Linear), callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_7(src, mipIndex, x, width, y, height, z, depth, GraphicsFormatUtility.GetGraphicsFormat(dstFormat, QualitySettings.activeColorSpace == ColorSpace.Linear), callback, &data);
             }
         }
 
@@ -230,28 +243,29 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             unsafe
             {
-                Internal_RequestAsyncReadback_7(src, mipIndex, x, width, y, height, z, depth, dstFormat, callback, output.GetUnsafePtr(), output.Length * UnsafeUtility.SizeOf<T>());
+                var data = AsyncRequestNativeArrayData.CreateAndCheckAccess(output);
+                Internal_RequestAsyncReadback_7(src, mipIndex, x, width, y, height, z, depth, dstFormat, callback, &data);
             }
         }
 
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_1([NotNull] ComputeBuffer src, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_1([NotNull] ComputeBuffer src, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_2([NotNull] ComputeBuffer src, int size, int offset, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_2([NotNull] ComputeBuffer src, int size, int offset, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_3([NotNull] Texture src, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_3([NotNull] Texture src, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_4([NotNull] Texture src, int mipIndex, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_4([NotNull] Texture src, int mipIndex, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_5([NotNull] Texture src, int mipIndex, GraphicsFormat dstFormat, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_5([NotNull] Texture src, int mipIndex, GraphicsFormat dstFormat, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_6([NotNull] Texture src, int mipIndex, int x, int width, int y, int height, int z, int depth, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_6([NotNull] Texture src, int mipIndex, int x, int width, int y, int height, int z, int depth, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_7([NotNull] Texture src, int mipIndex, int x, int width, int y, int height, int z, int depth, GraphicsFormat dstFormat, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_7([NotNull] Texture src, int mipIndex, int x, int width, int y, int height, int z, int depth, GraphicsFormat dstFormat, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_8([NotNull] GraphicsBuffer src, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_8([NotNull] GraphicsBuffer src, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
         [NativeMethod("AddRequestAsyncReadback")]
-        unsafe extern private void Internal_RequestAsyncReadback_9([NotNull] GraphicsBuffer src, int size, int offset, [NotNull] Action<AsyncGPUReadbackRequest> callback, void* output = null, int allocationSize = 0);
+        unsafe extern private void Internal_RequestAsyncReadback_9([NotNull] GraphicsBuffer src, int size, int offset, [NotNull] Action<AsyncGPUReadbackRequest> callback, AsyncRequestNativeArrayData* nativeArrayData = null);
 
         [NativeMethod("AddSetInvertCulling")]
         public extern void SetInvertCulling(bool invertCulling);
@@ -302,11 +316,15 @@ namespace UnityEngine.Rendering
 
         [FreeFunction("RenderingCommandBuffer_Bindings::SetComputeBufferParam", HasExplicitThis = true)]
         extern private void Internal_SetComputeBufferParam([NotNull] ComputeShader computeShader, int kernelIndex, int nameID, ComputeBuffer buffer);
+
         [FreeFunction("RenderingCommandBuffer_Bindings::SetComputeGraphicsBufferParam", HasExplicitThis = true)]
         extern private void Internal_SetComputeGraphicsBufferParam([NotNull] ComputeShader computeShader, int kernelIndex, int nameID, GraphicsBuffer buffer);
 
         [FreeFunction("RenderingCommandBuffer_Bindings::SetComputeConstantBufferParam", HasExplicitThis = true)]
-        extern public void SetComputeConstantBufferParam([NotNull] ComputeShader computeShader, int nameID, ComputeBuffer buffer, int offset, int size);
+        extern private void Internal_SetComputeConstantComputeBufferParam([NotNull] ComputeShader computeShader, int nameID, ComputeBuffer buffer, int offset, int size);
+
+        [FreeFunction("RenderingCommandBuffer_Bindings::SetComputeConstantBufferParam", HasExplicitThis = true)]
+        extern private void Internal_SetComputeConstantGraphicsBufferParam([NotNull] ComputeShader computeShader, int nameID, GraphicsBuffer buffer, int offset, int size);
 
         [FreeFunction("RenderingCommandBuffer_Bindings::Internal_DispatchCompute", HasExplicitThis = true, ThrowsException = true)]
         extern private void Internal_DispatchCompute([NotNull] ComputeShader computeShader, int kernelIndex, int threadGroupsX, int threadGroupsY, int threadGroupsZ);
@@ -318,6 +336,12 @@ namespace UnityEngine.Rendering
 
         [FreeFunction("RenderingCommandBuffer_Bindings::Internal_SetRayTracingBufferParam", HasExplicitThis = true)]
         extern private void Internal_SetRayTracingBufferParam([NotNull] RayTracingShader rayTracingShader, int nameID, ComputeBuffer buffer);
+
+        [FreeFunction("RenderingCommandBuffer_Bindings::Internal_SetRayTracingConstantBufferParam", HasExplicitThis = true)]
+        extern private void Internal_SetRayTracingConstantComputeBufferParam([NotNull] RayTracingShader rayTracingShader, int nameID, ComputeBuffer buffer, int offset, int size);
+
+        [FreeFunction("RenderingCommandBuffer_Bindings::Internal_SetRayTracingConstantBufferParam", HasExplicitThis = true)]
+        extern private void Internal_SetRayTracingConstantGraphicsBufferParam([NotNull] RayTracingShader rayTracingShader, int nameID, GraphicsBuffer buffer, int offset, int size);
 
         [FreeFunction("RenderingCommandBuffer_Bindings::Internal_SetRayTracingTextureParam", HasExplicitThis = true)]
         extern private void Internal_SetRayTracingTextureParam([NotNull] RayTracingShader rayTracingShader, int nameID, ref UnityEngine.Rendering.RenderTargetIdentifier rt);
@@ -347,7 +371,7 @@ namespace UnityEngine.Rendering
         extern private void Internal_SetRayTracingInts([NotNull] RayTracingShader rayTracingShader, int nameID, int[] values);
 
         [FreeFunction("RenderingCommandBuffer_Bindings::Internal_BuildRayTracingAccelerationStructure", HasExplicitThis = true)]
-        extern private void Internal_BuildRayTracingAccelerationStructure([NotNull] RayTracingAccelerationStructure accelerationStructure);
+        extern private void Internal_BuildRayTracingAccelerationStructure([NotNull] RayTracingAccelerationStructure accelerationStructure, Vector3 relativeOrigin);
 
         [FreeFunction("RenderingCommandBuffer_Bindings::Internal_SetRayTracingAccelerationStructure", HasExplicitThis = true)]
         extern private void Internal_SetRayTracingAccelerationStructure([NotNull] RayTracingShader rayTracingShader, int nameID, RayTracingAccelerationStructure accelerationStructure);
@@ -359,7 +383,7 @@ namespace UnityEngine.Rendering
         extern private void Internal_DispatchRays([NotNull] RayTracingShader rayTracingShader, string rayGenShaderName, UInt32 width, UInt32 height, UInt32 depth, Camera camera = null);
 
         [NativeMethod("AddGenerateMips")]
-        extern private void Internal_GenerateMips(RenderTexture rt);
+        extern private void Internal_GenerateMips(RenderTargetIdentifier rt);
 
         [NativeMethod("AddResolveAntiAliasedSurface")]
         extern private void Internal_ResolveAntiAliasedSurface(RenderTexture rt, RenderTexture target);
@@ -766,7 +790,7 @@ namespace UnityEngine.Rendering
         public void SetRenderTarget(RenderTargetIdentifier color, RenderTargetIdentifier depth)
         {
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
-            SetRenderTargetColorDepth_Internal(color, depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store);
+            SetRenderTargetColorDepth_Internal(color, depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderTargetFlags.None);
         }
 
         public void SetRenderTarget(RenderTargetIdentifier color, RenderTargetIdentifier depth, int mipLevel)
@@ -775,7 +799,8 @@ namespace UnityEngine.Rendering
             if (mipLevel < 0)
                 throw new ArgumentException(String.Format("Invalid value for mipLevel ({0})", mipLevel));
             SetRenderTargetColorDepth_Internal(new RenderTargetIdentifier(color, mipLevel),
-                depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store);
+                depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store,
+                RenderTargetFlags.None);
         }
 
         public void SetRenderTarget(RenderTargetIdentifier color, RenderTargetIdentifier depth, int mipLevel, CubemapFace cubemapFace)
@@ -784,7 +809,7 @@ namespace UnityEngine.Rendering
             if (mipLevel < 0)
                 throw new ArgumentException(String.Format("Invalid value for mipLevel ({0})", mipLevel));
             SetRenderTargetColorDepth_Internal(new RenderTargetIdentifier(color, mipLevel, cubemapFace),
-                depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store);
+                depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderTargetFlags.None);
         }
 
         public void SetRenderTarget(RenderTargetIdentifier color, RenderTargetIdentifier depth, int mipLevel, CubemapFace cubemapFace, int depthSlice)
@@ -795,7 +820,7 @@ namespace UnityEngine.Rendering
             if (mipLevel < 0)
                 throw new ArgumentException(String.Format("Invalid value for mipLevel ({0})", mipLevel));
             SetRenderTargetColorDepth_Internal(new RenderTargetIdentifier(color, mipLevel, cubemapFace, depthSlice),
-                depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store);
+                depth, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderTargetFlags.None);
         }
 
         public void SetRenderTarget(RenderTargetIdentifier color, RenderBufferLoadAction colorLoadAction, RenderBufferStoreAction colorStoreAction,
@@ -804,7 +829,7 @@ namespace UnityEngine.Rendering
             ValidateAgainstExecutionFlags(CommandBufferExecutionFlags.None, CommandBufferExecutionFlags.AsyncCompute);
             if (colorLoadAction == RenderBufferLoadAction.Clear || depthLoadAction == RenderBufferLoadAction.Clear)
                 throw new ArgumentException("RenderBufferLoadAction.Clear is not supported");
-            SetRenderTargetColorDepth_Internal(color, depth, colorLoadAction, colorStoreAction, depthLoadAction, depthStoreAction);
+            SetRenderTargetColorDepth_Internal(color, depth, colorLoadAction, colorStoreAction, depthLoadAction, depthStoreAction, RenderTargetFlags.None);
         }
 
         public void SetRenderTarget(RenderTargetIdentifier[] colors, Rendering.RenderTargetIdentifier depth)
@@ -815,7 +840,7 @@ namespace UnityEngine.Rendering
             if (colors.Length > SystemInfo.supportedRenderTargetCount)
                 throw new ArgumentException(string.Format("colors.Length is {0} and exceeds the maximum number of supported render targets ({1})", colors.Length, SystemInfo.supportedRenderTargetCount));
 
-            SetRenderTargetMulti_Internal(colors, depth, null, null, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store);
+            SetRenderTargetMulti_Internal(colors, depth, null, null, RenderBufferLoadAction.Load, RenderBufferStoreAction.Store, RenderTargetFlags.None);
         }
 
         public void SetRenderTarget(RenderTargetIdentifier[] colors, Rendering.RenderTargetIdentifier depth, int mipLevel, CubemapFace cubemapFace, int depthSlice)
@@ -862,9 +887,9 @@ namespace UnityEngine.Rendering
                 throw new ArgumentException("RenderBufferLoadAction.Clear is not supported");
 
             if (binding.colorRenderTargets.Length == 1) // non-MRT case respects mip/face/slice of color's RenderTargetIdentifier
-                SetRenderTargetColorDepth_Internal(binding.colorRenderTargets[0], binding.depthRenderTarget, binding.colorLoadActions[0], binding.colorStoreActions[0], binding.depthLoadAction, binding.depthStoreAction);
+                SetRenderTargetColorDepth_Internal(binding.colorRenderTargets[0], binding.depthRenderTarget, binding.colorLoadActions[0], binding.colorStoreActions[0], binding.depthLoadAction, binding.depthStoreAction, binding.flags);
             else
-                SetRenderTargetMulti_Internal(binding.colorRenderTargets, binding.depthRenderTarget, binding.colorLoadActions, binding.colorStoreActions, binding.depthLoadAction, binding.depthStoreAction);
+                SetRenderTargetMulti_Internal(binding.colorRenderTargets, binding.depthRenderTarget, binding.colorLoadActions, binding.colorStoreActions, binding.depthLoadAction, binding.depthStoreAction, binding.flags);
         }
 
         extern private void SetRenderTargetSingle_Internal(RenderTargetIdentifier rt,
@@ -873,11 +898,13 @@ namespace UnityEngine.Rendering
 
         extern private void SetRenderTargetColorDepth_Internal(RenderTargetIdentifier color, RenderTargetIdentifier depth,
             RenderBufferLoadAction colorLoadAction, RenderBufferStoreAction colorStoreAction,
-            RenderBufferLoadAction depthLoadAction, RenderBufferStoreAction depthStoreAction);
+            RenderBufferLoadAction depthLoadAction, RenderBufferStoreAction depthStoreAction,
+            RenderTargetFlags flags);
 
         extern private void SetRenderTargetMulti_Internal(RenderTargetIdentifier[] colors, Rendering.RenderTargetIdentifier depth,
             RenderBufferLoadAction[] colorLoadActions, RenderBufferStoreAction[] colorStoreActions,
-            RenderBufferLoadAction depthLoadAction, RenderBufferStoreAction depthStoreAction);
+            RenderBufferLoadAction depthLoadAction, RenderBufferStoreAction depthStoreAction,
+            RenderTargetFlags flags);
         extern private void SetRenderTargetColorDepthSubtarget(RenderTargetIdentifier color, RenderTargetIdentifier depth,
             RenderBufferLoadAction colorLoadAction, RenderBufferStoreAction colorStoreAction,
             RenderBufferLoadAction depthLoadAction, RenderBufferStoreAction depthStoreAction,

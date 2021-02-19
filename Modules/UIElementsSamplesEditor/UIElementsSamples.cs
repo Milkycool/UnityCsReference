@@ -13,9 +13,9 @@ namespace UnityEditor.UIElements.Samples
 {
     internal class UIElementsSamples : EditorWindow
     {
-        private static readonly string s_StyleSheetPath = "StyleSheets/UIElementsSamples/UIElementsSamples.uss";
-        private static readonly string s_DarkStyleSheetPath = "StyleSheets/UIElementsSamples/UIElementsSamplesDark.uss";
-        private static readonly string s_LightStyleSheetPath = "StyleSheets/UIElementsSamples/UIElementsSamplesLight.uss";
+        private static readonly string s_StyleSheetPath = "UIPackageResources/StyleSheets/UIElementsSamples/UIElementsSamples.uss";
+        private static readonly string s_DarkStyleSheetPath = "UIPackageResources/StyleSheets/UIElementsSamples/UIElementsSamplesDark.uss";
+        private static readonly string s_LightStyleSheetPath = "UIPackageResources/StyleSheets/UIElementsSamples/UIElementsSamplesLight.uss";
 
         private readonly string k_SplitterClassName = "unity-samples-explorer";
         private readonly int k_SplitterLeftPaneStartingWidth = 200;
@@ -36,12 +36,25 @@ namespace UnityEditor.UIElements.Samples
 
         private VisualElement m_ContentPanel;
 
-        [MenuItem("Window/UI/UIElements Samples", false, 3010)]
-        public static void ShowExample()
+        public const string k_WindowPath = "Window/UI Toolkit/Samples";
+        public static readonly string OpenWindowCommand = nameof(OpenUIElementsSamplesCommand);
+
+        [MenuItem(k_WindowPath, false, 3010, false)]
+        private static void OpenUIElementsSamplesCommand()
+        {
+            if (CommandService.Exists(OpenWindowCommand))
+                CommandService.Execute(OpenWindowCommand, CommandHint.Menu);
+            else
+            {
+                OpenUIElementsSamples();
+            }
+        }
+
+        public static void OpenUIElementsSamples()
         {
             var wnd = GetWindow<UIElementsSamples>();
             wnd.minSize = new Vector2(345, 100);
-            wnd.titleContent = new GUIContent("UIElements Samples");
+            wnd.titleContent = new GUIContent("UI Toolkit Samples");
         }
 
         internal class SampleTreeItem : TreeViewItem<string>
@@ -85,6 +98,7 @@ namespace UnityEditor.UIElements.Samples
                 new SampleTreeItem("Toggle", ToggleSnippet.Create),
                 new SampleTreeItem("Label", LabelSnippet.Create),
                 new SampleTreeItem("Text Field", TextFieldSnippet.Create),
+                new SampleTreeItem("HelpBox", HelpBoxSnippet.Create),
                 new SampleTreeItem("Object Field", ObjectFieldSnippet.Create),
                 new SampleTreeItem("List View", ListViewSnippet.Create),
                 new SampleTreeItem("Numeric Fields", MakeNumericFieldsPanel, new List<TreeViewItem<string>>()

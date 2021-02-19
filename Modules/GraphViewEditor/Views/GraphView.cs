@@ -164,7 +164,6 @@ namespace UnityEditor.Experimental.GraphView
         private int m_SavedSelectionVersion;
         private PersistedSelection m_PersistedSelection;
         private GraphViewUndoRedoSelection m_GraphViewUndoRedoSelection;
-        private bool m_FontsOverridden = false;
 
         class ContentViewContainer : VisualElement
         {
@@ -296,24 +295,6 @@ namespace UnityEditor.Experimental.GraphView
             RegisterCallback<AttachToPanelEvent>(OnEnterPanel);
             RegisterCallback<DetachFromPanelEvent>(OnLeavePanel);
             RegisterCallback<ContextualMenuPopulateEvent>(OnContextualMenu);
-
-            // We override the font for all GraphElements here so we can use the fallback system.
-            // We load the dummy font first and then we overwrite the fontNames, just like we do
-            // with the Editor's default font asset. Loading system fonts directly via
-            // Font.CreateDynamicFontFromOSFont() caused TextMesh to generate the wrong bounds.
-            //
-            // TODO: Add font fallback specifications and use of system fonts to USS.
-            if (!m_FontsOverridden && (Application.platform == RuntimePlatform.WindowsEditor || Application.platform == RuntimePlatform.OSXEditor))
-            {
-                Font graphViewFont = EditorGUIUtility.LoadRequired("GraphView/DummyFont(LucidaGrande).ttf") as Font;
-
-                if (Application.platform == RuntimePlatform.WindowsEditor)
-                    graphViewFont.fontNames = new string[] { "Verdana" };
-                else if (Application.platform == RuntimePlatform.OSXEditor)
-                    graphViewFont.fontNames = new string[] { "Lucida Grande" };
-
-                m_FontsOverridden = true;
-            }
         }
 
         private void ClearSavedSelection()
@@ -853,7 +834,7 @@ namespace UnityEditor.Experimental.GraphView
             if (p != null)
             {
                 if (graphViewShader == null)
-                    graphViewShader = EditorGUIUtility.LoadRequired("GraphView/GraphViewUIE.shader") as Shader;
+                    graphViewShader = Shader.Find("Hidden/GraphView/GraphViewUIE");
                 p.standardShader = graphViewShader;
                 HostView ownerView = p.ownerObject as HostView;
                 if (ownerView != null && ownerView.actualView != null)
@@ -1058,7 +1039,7 @@ namespace UnityEditor.Experimental.GraphView
         }
 
         protected internal virtual bool canCopySelection =>
-            selection.Any(s => s is Node || s is Group || s is Placemat);
+            selection.Any(s => s is Node || s is Group || s is Placemat || s is StickyNote);
 
         public static void CollectElements(IEnumerable<GraphElement> elements, HashSet<GraphElement> collectedElementSet, Func<GraphElement, bool> conditionFunc)
         {
@@ -1104,7 +1085,7 @@ namespace UnityEditor.Experimental.GraphView
         }
 
         protected internal virtual bool canCutSelection =>
-            selection.Any(s => s is Node || s is Group || s is Placemat);
+            selection.Any(s => s is Node || s is Group || s is Placemat || s is StickyNote);
 
         protected internal void CutSelectionCallback()
         {
@@ -1545,9 +1526,9 @@ namespace UnityEditor.Experimental.GraphView
         static readonly int s_EditorPixelsPerPointId = Shader.PropertyToID("_EditorPixelsPerPoint");
         static readonly int s_GraphViewScaleId = Shader.PropertyToID("_GraphViewScale");
 
-        void OnBeforeDrawChain(UnityEngine.UIElements.UIR.UIRenderDevice device)
+        void OnBeforeDrawChain(UnityEngine.UIElements.UIR.RenderChain renderChain)
         {
-            Material mat = device.GetStandardMaterial();
+            Material mat = renderChain.GetStandardMaterial();
             // Set global graph view shader properties (used by UIR)
             mat.SetFloat(s_EditorPixelsPerPointId, EditorGUIUtility.pixelsPerPoint);
             mat.SetFloat(s_GraphViewScaleId, scale);

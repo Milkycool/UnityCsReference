@@ -8,12 +8,7 @@ using System.Collections.Generic;
 using UnityEngine.SceneManagement;
 
 using System;
-using UnityEngineInternal;
 using Object = UnityEngine.Object;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Collections;
-using UnityEngine.Scripting;
 
 using RequiredByNativeCodeAttribute = UnityEngine.Scripting.RequiredByNativeCodeAttribute;
 
@@ -78,6 +73,7 @@ namespace UnityEditor
                 RegisterCompleteObjectUndoMultiple(objectsToUndo[0], objectsToUndo, name, 0);
         }
 
+        [NativeThrows]
         [StaticAccessor("UndoBindings", StaticAccessorType.DoubleColon)]
         private static extern void RegisterCompleteObjectUndoMultiple([NotNull] Object identifier, Object[] objectsToUndo, string name, int namePriority);
 
@@ -110,6 +106,9 @@ namespace UnityEditor
             return AddComponent(gameObject, typeof(T)) as T;
         }
 
+        [StaticAccessor("UndoBindings", StaticAccessorType.DoubleColon)]
+        public static extern void RegisterImporterUndo(string path, string name);
+
         [FreeFunction("RegisterFullObjectHierarchyUndo")]
         public static extern void RegisterFullObjectHierarchyUndo([NotNull] Object objectToUndo, string name);
 
@@ -127,6 +126,7 @@ namespace UnityEditor
             RecordObjectsInternal(objectsToUndo, objectsToUndo.Length, name);
         }
 
+        [NativeThrows]
         [StaticAccessor("UndoBindings", StaticAccessorType.DoubleColon)]
         private static extern void RecordObjectsInternal(Object[] objectToUndo, int size, string name);
 

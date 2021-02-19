@@ -108,10 +108,6 @@ namespace UnityEditor
                     {
                         r = m_Grid.CalcRect(itemIdx, yOffset);
 
-                        // Label has selection visuals now (keep below)
-                        // bool selected = !AssetStoreAssetSelection.Empty && AssetStoreAssetSelection.ContainsAsset (m_Assets[itemIdx].id);
-                        // bool selected = false;
-
                         // Mouse event handling
                         int clicks = HandleMouse(r);
                         if (clicks != 0)
@@ -197,7 +193,6 @@ namespace UnityEditor
 
             void DrawIcon(Rect position, AssetStoreAsset assetStoreResource)
             {
-                // bool selected = !AssetStoreAssetSelection.Empty && AssetStoreAssetSelection.ContainsAsset (assetStoreResource.id);
                 bool selected = false; // labels have selection rendering only
 
                 m_Content.text = null;

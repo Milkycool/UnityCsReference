@@ -448,13 +448,15 @@ namespace UnityEngine
         [NativeName("GetPixelBilinear")] extern private Color GetPixelBilinearImpl(int image, float u, float v, float w);
 
         [FreeFunction("Texture3DScripting::Create")]
-        extern private static bool Internal_CreateImpl([Writable] Texture3D mono, int w, int h, int d, int mipCount, GraphicsFormat format, TextureCreationFlags flags);
-        private static void Internal_Create([Writable] Texture3D mono, int w, int h, int d, int mipCount, GraphicsFormat format, TextureCreationFlags flags)
+        extern private static bool Internal_CreateImpl([Writable] Texture3D mono, int w, int h, int d, int mipCount, GraphicsFormat format, TextureCreationFlags flags, IntPtr nativeTex);
+        private static void Internal_Create([Writable] Texture3D mono, int w, int h, int d, int mipCount, GraphicsFormat format, TextureCreationFlags flags, IntPtr nativeTex)
         {
-            if (!Internal_CreateImpl(mono, w, h, d, mipCount, format, flags))
+            if (!Internal_CreateImpl(mono, w, h, d, mipCount, format, flags, nativeTex))
                 throw new UnityException("Failed to create texture because of invalid parameters.");
         }
 
+        [FreeFunction("Texture3DScripting::UpdateExternalTexture", HasExplicitThis = true)]
+        extern public void UpdateExternalTexture(IntPtr nativeTex);
         [FreeFunction(Name = "Texture3DScripting::Apply", HasExplicitThis = true)]
         extern private void ApplyImpl(bool updateMipmaps, bool makeNoLongerReadable);
 
@@ -563,6 +565,7 @@ namespace UnityEngine
     }
 
     [NativeHeader("Runtime/Graphics/CubemapArrayTexture.h")]
+    [ExcludeFromPreset]
     public sealed partial class CubemapArray : Texture
     {
         extern public int cubemapCount { get; }
@@ -717,6 +720,7 @@ namespace UnityEngine
         extern public void Release();
         extern public bool IsCreated();
         extern public void GenerateMips();
+        [NativeThrows]
         extern public void ConvertToEquirect(RenderTexture equirect, Camera.MonoOrStereoscopicEye eye = Camera.MonoOrStereoscopicEye.Mono);
 
         extern internal void SetSRGBReadWrite(bool srgb);
@@ -766,7 +770,13 @@ namespace UnityEngine
         extern private static void Internal_CreateCustomRenderTexture([Writable] CustomRenderTexture rt);
 
         [NativeName("TriggerUpdate")]
-        extern public void Update(int count);
+        extern void TriggerUpdate(int count);
+
+        public void Update(int count)
+        {
+            CustomRenderTextureManager.InvokeTriggerUpdate(this, count);
+            TriggerUpdate(count);
+        }
 
         public void Update()
         {
@@ -774,7 +784,13 @@ namespace UnityEngine
         }
 
         [NativeName("TriggerInitialization")]
-        extern public void Initialize();
+        extern void TriggerInitialization();
+
+        public void Initialize()
+        {
+            TriggerInitialization();
+            CustomRenderTextureManager.InvokeTriggerInitialize(this);
+        }
 
         extern public void ClearUpdateZones();
 
@@ -795,6 +811,11 @@ namespace UnityEngine
         [FreeFunction(Name = "CustomRenderTextureScripting::SetUpdateZonesInternal", HasExplicitThis = true)]
         extern private void SetUpdateZonesInternal(CustomRenderTextureUpdateZone[] updateZones);
 
+        [FreeFunction(Name = "CustomRenderTextureScripting::GetDoubleBufferRenderTexture", HasExplicitThis = true)]
+        extern public RenderTexture GetDoubleBufferRenderTexture();
+
+        extern public void EnsureDoubleBufferConsistency();
+
         public void SetUpdateZones(CustomRenderTextureUpdateZone[] updateZones)
         {
             if (updateZones == null)
@@ -812,5 +833,6 @@ namespace UnityEngine
         extern public uint cubemapFaceMask { get; set; }
         extern public bool doubleBuffered { get; set; }
         extern public bool wrapUpdateZones { get; set; }
+        extern public float updatePeriod { get; set; }
     }
 }

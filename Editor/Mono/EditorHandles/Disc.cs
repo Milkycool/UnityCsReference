@@ -37,6 +37,7 @@ namespace UnityEditorInternal
             switch (evt.GetTypeForControl(id))
             {
                 case EventType.Layout:
+                case EventType.MouseMove:
                 {
                     float d;
                     if (cutoffPlane)
@@ -118,11 +119,6 @@ namespace UnityEditorInternal
                     }
                     break;
 
-                case EventType.MouseMove:
-                    if (id == HandleUtility.nearestControl)
-                        HandleUtility.Repaint();
-                    break;
-
                 case EventType.KeyDown:
                     if (evt.keyCode == KeyCode.Escape && GUIUtility.hotControl == id)
                     {
@@ -133,18 +129,7 @@ namespace UnityEditorInternal
                     break;
 
                 case EventType.Repaint:
-                    Color temp = Color.white;
-
-                    if (id == GUIUtility.hotControl)
-                    {
-                        temp = Handles.color;
-                        Handles.color = Handles.selectedColor;
-                    }
-                    else if (id == HandleUtility.nearestControl && GUIUtility.hotControl == 0 && !evt.alt)
-                    {
-                        temp = Handles.color;
-                        Handles.color = Handles.preselectionColor;
-                    }
+                    Handles.SetupHandleColor(id, evt, out var prevColor, out var thickness);
 
                     // If we're dragging it, we'll go a bit further and draw a selection pie
                     if (GUIUtility.hotControl == id)
@@ -172,15 +157,14 @@ namespace UnityEditorInternal
                     }
 
                     if (showHotArc && GUIUtility.hotControl == id || GUIUtility.hotControl != id && !cutoffPlane)
-                        Handles.DrawWireDisc(position, axis, size);
+                        Handles.DrawWireDisc(position, axis, size, thickness);
                     else if (GUIUtility.hotControl != id && cutoffPlane)
                     {
                         Vector3 from = Vector3.Cross(axis, cam).normalized;
-                        Handles.DrawWireArc(position, axis, from, 180, size);
+                        Handles.DrawWireArc(position, axis, from, 180, size, thickness);
                     }
 
-                    if (id == GUIUtility.hotControl || id == HandleUtility.nearestControl && GUIUtility.hotControl == 0)
-                        Handles.color = temp;
+                    Handles.color = prevColor;
                     break;
             }
 

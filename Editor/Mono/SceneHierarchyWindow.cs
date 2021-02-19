@@ -6,16 +6,20 @@ using UnityEngine;
 using System.Collections.Generic;
 using UnityEditor.SceneManagement;
 using UnityEngine.SceneManagement;
+using UnityEditor.ShortcutManagement;
+using UnityEngine.Scripting;
 
 namespace UnityEditor
 {
     [EditorWindowTitle(title = "Hierarchy", useTypeNameAsIconName = true)]
-    internal class SceneHierarchyWindow : SearchableEditorWindow, IHasCustomMenu
+    internal class SceneHierarchyWindow : SearchableEditorWindow, IHasCustomMenu, IPropertySourceOpener
     {
         public static SceneHierarchyWindow lastInteractedHierarchyWindow { get { return s_LastInteractedHierarchy; } }
         static SceneHierarchyWindow s_LastInteractedHierarchy;
         public static List<SceneHierarchyWindow> GetAllSceneHierarchyWindows() { return s_SceneHierarchyWindows; }
         static List<SceneHierarchyWindow> s_SceneHierarchyWindows = new List<SceneHierarchyWindow>();
+
+        internal static SavedBool s_EnterRenameModeForNewGO = new SavedBool("SceneHierarchyWindow.RenameNewObjects", true);
 
         static class Styles
         {
@@ -60,6 +64,7 @@ namespace UnityEditor
             m_StageHandling.OnEnable();
 
             titleContent = GetLocalizedTitleContent();
+            wantsLessLayoutEvents = true;
         }
 
         public override void OnDisable()
@@ -130,6 +135,8 @@ namespace UnityEditor
 
             ExecuteCommands();
         }
+
+        public Object hoveredObject => sceneHierarchy.treeView.hoveredItem != null ? Object.FindObjectFromInstanceID(sceneHierarchy.treeView.hoveredItem.id) : null;
 
         public void ReloadData()
         {
@@ -254,6 +261,11 @@ namespace UnityEditor
             m_SceneHierarchy.SetExpandedRecursive(id, expand);
         }
 
+        internal void SetExpanded(int id, bool expand)
+        {
+            m_SceneHierarchy.ExpandTreeViewItem(id, expand);
+        }
+
         public void FrameObject(int instanceID, bool ping)
         {
             // To be able to frame the object we need to clear the search filter
@@ -287,6 +299,43 @@ namespace UnityEditor
         internal void RebuildStageHeader()
         {
             m_StageHandling.CacheStageHeaderContent();
+        }
+
+        [MenuItem("Edit/Paste As Child %#V", false, 103)]
+        static void PasteAsChild()
+        {
+            CutCopyPasteUtility.PasteGOAsChild();
+        }
+
+        [MenuItem("Edit/Paste As Child %#V", true, 103)]
+        static bool ValidatePasteAsChild()
+        {
+            return CutCopyPasteUtility.CanPasteAsChild();
+        }
+
+        [UsedByNativeCode]
+        internal static void FrameAndRenameNewGameObject()
+        {
+            SceneHierarchyWindow hierarchyWindow = lastInteractedHierarchyWindow;
+
+            if (hierarchyWindow == null)
+                return;
+
+            SceneHierarchy sceneHierarchy = hierarchyWindow.m_SceneHierarchy;
+
+            GameObject go = Selection.activeGameObject;
+
+            if (go != null)
+            {
+                sceneHierarchy.treeView?.Frame(go.GetInstanceID(), true, false);
+            }
+
+            sceneHierarchy.RenameNewGO();
+        }
+
+        internal static void SwitchEnterRenameModeForNewGO()
+        {
+            s_EnterRenameModeForNewGO.value = !s_EnterRenameModeForNewGO.value;
         }
     }
 

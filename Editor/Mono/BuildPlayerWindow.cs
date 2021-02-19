@@ -13,12 +13,12 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using UnityEditor.VersionControl;
 using UnityEditor.Modules;
 using GraphicsDeviceType = UnityEngine.Rendering.GraphicsDeviceType;
 using Object = UnityEngine.Object;
 using TargetAttributes = UnityEditor.BuildTargetDiscovery.TargetAttributes;
 using UnityEditor.Connect;
+using UnityEditor.Utils;
 
 namespace UnityEditor
 {
@@ -28,6 +28,7 @@ namespace UnityEditor
         {
             public GUIContent invalidColorSpaceMessage = EditorGUIUtility.TrTextContent("In order to build a player, go to 'Player Settings...' to resolve the incompatibility between the Color Space and the current settings.", EditorGUIUtility.GetHelpIcon(MessageType.Warning));
             public GUIContent invalidLightmapEncodingMessage = EditorGUIUtility.TrTextContent("In order to build a player, go to 'Player Settings...' to resolve the incompatibility between the selected Lightmap Encoding and the current settings.", EditorGUIUtility.GetHelpIcon(MessageType.Warning));
+            public GUIContent invalidVirtualTexturingSettingMessage = EditorGUIUtility.TrTextContent("Cannot build player because Virtual Texturing is enabled, but the target platform or graphics API does not support Virtual Texturing. Go to Player Settings to resolve the incompatibility.", EditorGUIUtility.GetHelpIcon(MessageType.Warning));
             public GUIContent compilingMessage = EditorGUIUtility.TrTextContent("Cannot build player while editor is importing assets or compiling scripts.", EditorGUIUtility.GetHelpIcon(MessageType.Warning));
             public GUIStyle title = EditorStyles.boldLabel;
             public GUIStyle evenRow = "CN EntryBackEven";
@@ -43,6 +44,7 @@ namespace UnityEditor
             public GUIContent addOpenSource = EditorGUIUtility.TrTextContent("Add Open Scenes");
             public string noModuleLoaded = L10n.Tr("No {0} module loaded.");
             public GUIContent openDownloadPage = EditorGUIUtility.TrTextContent("Open Download Page");
+            public GUIContent installModuleWithHub = EditorGUIUtility.TrTextContent("Install with Unity Hub");
             public string infoText = L10n.Tr("{0} is not included in your Unity Pro license. Your {0} build will include a Unity Personal Edition splash screen.\n\nYou must be eligible to use Unity Personal Edition to use this build option. Please refer to our EULA for further information.");
             public GUIContent eula = EditorGUIUtility.TrTextContent("Eula");
             public string addToYourPro = L10n.Tr("Add {0} to your Unity Pro license");
@@ -94,6 +96,8 @@ namespace UnityEditor
 
         static Styles styles = null;
 
+        static bool isEditorinstalledWithHub = IsEditorInstalledWithHub();
+
         public static void ShowBuildPlayerWindow()
         {
             EditorUserBuildSettings.selectedBuildTargetGroup = EditorUserBuildSettings.activeBuildTargetGroup;
@@ -110,8 +114,17 @@ namespace UnityEditor
         static void BuildPlayerAndRun()
         {
             var buildTarget = EditorUserBuildSettingsUtils.CalculateSelectedBuildTarget();
-            var buildLocation = EditorUserBuildSettings.GetBuildLocation(buildTarget);
-            BuildPlayerAndRun(!BuildLocationIsValid(buildLocation));
+            var lastBuildLocation = EditorUserBuildSettings.GetBuildLocation(buildTarget);
+            bool buildLocationIsValid = BuildLocationIsValid(lastBuildLocation);
+
+            if (buildLocationIsValid && (buildTarget == BuildTarget.StandaloneWindows || buildTarget == BuildTarget.StandaloneWindows64))
+            {
+                // Case 1208041: Windows Standalone .exe name depends on productName player setting
+                var newBuildLocation = Path.Combine(Path.GetDirectoryName(lastBuildLocation), Paths.MakeValidFileName(PlayerSettings.productName) + ".exe").Replace(Path.DirectorySeparatorChar, '/');
+                EditorUserBuildSettings.SetBuildLocation(buildTarget, newBuildLocation);
+            }
+
+            BuildPlayerAndRun(!buildLocationIsValid);
         }
 
         // This overload is used by the default player window, to always prompt for build location
@@ -337,14 +350,8 @@ namespace UnityEditor
                 if (buildSettingsLocked)
                 {
                     GUI.enabled = true;
-
-                    if (Provider.enabled && GUILayout.Button(styles.checkOut))
-                    {
-                        Asset asset = Provider.GetAssetByPath(kEditorBuildSettingsPath);
-                        var assetList = new AssetList();
-                        assetList.Add(asset);
-                        Provider.Checkout(assetList, CheckoutMode.Asset);
-                    }
+                    if (GUILayout.Button(styles.checkOut))
+                        AssetDatabase.MakeEditable(kEditorBuildSettingsPath);
                     GUILayout.Label(message);
                     GUI.enabled = false;
                 }
@@ -444,6 +451,28 @@ namespace UnityEditor
             }
         }
 
+        static bool IsVirtualTexturingSettingsValid(BuildPlatform platform)
+        {
+            if (!PlayerSettings.GetVirtualTexturingSupportEnabled())
+            {
+                return true;
+            }
+
+            if (!UnityEngine.Rendering.VirtualTexturingEditor.Building.IsPlatformSupportedForPlayer(platform.defaultTarget))
+            {
+                return false;
+            }
+
+            GraphicsDeviceType[] gfxTypes = PlayerSettings.GetGraphicsAPIs(platform.defaultTarget);
+            bool supportedAPI = true;
+            foreach (GraphicsDeviceType api in gfxTypes)
+            {
+                supportedAPI &= UnityEngine.Rendering.VirtualTexturingEditor.Building.IsRenderAPISupported(api, platform.defaultTarget, false);
+            }
+
+            return supportedAPI;
+        }
+
         // Major.Minor.Micro followed by one of abxfp followed by an identifier, optionally suffixed with " (revisionhash)"
         static Regex s_VersionPattern = new Regex(@"(?<shortVersion>\d+\.\d+\.\d+(?<suffix>((?<alphabeta>[abx])|[fp])[^\s]*))( \((?<revision>[a-fA-F\d]+)\))?",
             RegexOptions.Compiled);
@@ -497,8 +526,41 @@ namespace UnityEditor
                 folder = "MacEditorTargetInstaller";
                 extension = ".pkg";
             }
+            else if (Application.platform == RuntimePlatform.LinuxEditor)
+            {
+                if (moduleName == "Android" || moduleName == "Mac" || moduleName == "Windows")
+                {
+                    folder = "MacEditorTargetInstaller";
+                    extension = ".pkg";
+                }
+                else
+                {
+                    folder = "LinuxEditorTargetInstaller";
+                    extension = ".tar.xz";
+                }
+            }
 
             return string.Format("http://{0}.unity3d.com/{1}/{2}/{3}/UnitySetup-{4}-Support-for-Editor-{5}{6}", prefix, suffix, revision, folder, moduleName, shortVersion, extension);
+        }
+
+        static string GetUnityHubModuleDownloadURL(string moduleName)
+        {
+            string fullVersion = InternalEditorUtility.GetFullUnityVersion();
+            string revision = "";
+            string shortVersion = "";
+            Match versionMatch = s_VersionPattern.Match(fullVersion);
+            if (!versionMatch.Success || !versionMatch.Groups["shortVersion"].Success || !versionMatch.Groups["suffix"].Success)
+                Debug.LogWarningFormat("Error parsing version '{0}'", fullVersion);
+
+            if (versionMatch.Groups["shortVersion"].Success)
+                shortVersion = versionMatch.Groups["shortVersion"].Value;
+            if (versionMatch.Groups["revision"].Success)
+                revision = versionMatch.Groups["revision"].Value;
+
+            if (s_ModuleNames.ContainsKey(moduleName))
+                moduleName = s_ModuleNames[moduleName];
+
+            return string.Format("unityhub://{0}/{1}/module={2}", shortVersion, revision, moduleName.ToLower());
         }
 
         bool IsModuleNotInstalled(BuildTargetGroup buildTargetGroup, BuildTarget buildTarget)
@@ -512,6 +574,21 @@ namespace UnityEditor
                 Modules.ModuleManager.GetBuildPostProcessor(moduleName) == null &&
                 (BuildTargetGroup.Standalone != EditorUserBuildSettings.selectedBuildTargetGroup ||
                     !IsAnyStandaloneModuleLoaded());
+        }
+
+        static bool IsEditorInstalledWithHub()
+        {
+            var applicationFolderPath = Directory.GetParent(EditorApplication.applicationPath).FullName;
+            var path = "";
+
+            if (Application.platform == RuntimePlatform.OSXEditor)
+                path = Path.Combine(applicationFolderPath, "modules.json");
+            else if (Application.platform == RuntimePlatform.WindowsEditor)
+                path = Path.Combine(Directory.GetParent(applicationFolderPath).FullName, "modules.json");
+            else if (Application.platform == RuntimePlatform.LinuxEditor)
+                path = Path.Combine(Directory.GetParent(applicationFolderPath).FullName, "modules.json");
+
+            return System.IO.File.Exists(path);
         }
 
         void ShowBuildTargetSettings()
@@ -549,10 +626,23 @@ namespace UnityEditor
             if (IsModuleNotInstalled(buildTargetGroup, buildTarget))
             {
                 GUILayout.Label(EditorGUIUtility.TextContent(string.Format(styles.noModuleLoaded, BuildPlatforms.instance.GetModuleDisplayName(buildTargetGroup, buildTarget))));
-                if (GUILayout.Button(styles.openDownloadPage, EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
+                string url = "";
+
+                if (!isEditorinstalledWithHub || (moduleName == "PS4" || moduleName == "XboxOne"))
                 {
-                    string url = GetPlaybackEngineDownloadURL(moduleName);
-                    Help.BrowseURL(url);
+                    if (GUILayout.Button(styles.openDownloadPage, EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
+                    {
+                        url = GetPlaybackEngineDownloadURL(moduleName);
+                        Help.BrowseURL(url);
+                    }
+                }
+                else
+                {
+                    if (GUILayout.Button(styles.installModuleWithHub, EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
+                    {
+                        url = GetUnityHubModuleDownloadURL(moduleName);
+                        Help.BrowseURL(url);
+                    }
                 }
                 GUIBuildButtons(false, false, false, platform);
                 return;
@@ -831,6 +921,12 @@ namespace UnityEditor
                 enableBuildAndRunButton = false;
                 enableBuildButton = false;
                 EditorGUILayout.HelpBox(styles.invalidLightmapEncodingMessage);
+            }
+            else if (!IsVirtualTexturingSettingsValid(platform) && enableBuildButton && enableBuildAndRunButton)
+            {
+                enableBuildAndRunButton = false;
+                enableBuildButton = false;
+                EditorGUILayout.HelpBox(styles.invalidVirtualTexturingSettingMessage);
             }
 
             if (EditorApplication.isCompiling || EditorApplication.isUpdating)

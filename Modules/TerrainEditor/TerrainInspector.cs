@@ -111,6 +111,7 @@ namespace UnityEditor
             public readonly GUIContent treeColorVar = EditorGUIUtility.TrTextContent("Color Variation", "Amount of random shading applied to trees. This only works if the shader supports _TreeInstanceColor (for example, Speedtree shaders do not use this)");
             public readonly GUIContent treeRotation = EditorGUIUtility.TrTextContent("Random Tree Rotation", "Randomize tree rotation. This only works when the tree has an LOD group.");
             public readonly GUIContent treeRotationDisabled = EditorGUIUtility.TrTextContent("The selected tree does not have an LOD group, so it will use the default impostor system and will not support rotation.");
+            public readonly GUIContent treeHasChildRenderers = EditorGUIUtility.TrTextContent("The selected tree does not have an LOD group, but has a hierarchy of MeshRenderers, only MeshRenderer on root GameObject in the trees hierarchy will be used. Use a tree with LOD group if you want a tree with hierarchy of MeshRenderers.");
             public readonly GUIContent massPlaceTrees = EditorGUIUtility.TrTextContent("Mass Place Trees", "The Mass Place Trees button is a very useful way to create an overall covering of trees without painting over the whole landscape. Following a mass placement, you can still use painting to add or remove trees to create denser or sparser areas.");
             public readonly GUIContent treeContributeGI = EditorGUIUtility.TrTextContent("Tree Contribute Global Illumination", "The state of the Contribute GI flag for the tree prefab root GameObject. The flag can be changed on the prefab. When disabled, this tree will not be visible to the lightmapper. When enabled, any child GameObjects which also have the static flag enabled, will be present in lightmap calculations. Regardless of the value of the flag, each tree instance receives its own light probe and no lightmap texels.");
 
@@ -159,6 +160,9 @@ namespace UnityEditor
             public readonly GUIContent detailResolutionWarning = EditorGUIUtility.TrTextContent("You may reduce CPU draw call overhead by setting the detail resolution per patch as high as possible, relative to detail resolution.");
             public readonly GUIContent holesSettings = EditorGUIUtility.TrTextContent("Holes Settings (On Terrain Data)");
             public readonly GUIContent holesCompressionToggle = EditorGUIUtility.TrTextContent("Compress Holes Texture", "If enabled, holes texture will be compressed at runtime if compression supported.");
+            public readonly GUIContent detailShadersMissing = EditorGUIUtility.TrTextContent("The current render pipeline does not have all Detail shaders");
+            public readonly GUIContent detailShadersUnsupported = EditorGUIUtility.TrTextContent("The current render pipeline does not support Detail shaders");
+
 
             public static readonly GUIContent renderingLayerMask = EditorGUIUtility.TrTextContent("Rendering Layer Mask", "Mask that can be used with SRP DrawRenderers command to filter renderers outside of the normal layering system.");
 
@@ -1190,7 +1194,9 @@ namespace UnityEditor
 
             GUILayout.Space(5);
 
-            bool randomRotationEnabled = TerrainEditorUtility.IsLODTreePrototype(m_Terrain.terrainData.treePrototypes[PaintTreesTool.instance.selectedTree].m_Prefab);
+            GameObject prefab = m_Terrain.terrainData.treePrototypes[PaintTreesTool.instance.selectedTree].m_Prefab;
+
+            bool randomRotationEnabled = TerrainEditorUtility.IsLODTreePrototype(prefab);
             using (new EditorGUI.DisabledScope(!randomRotationEnabled))
             {
                 PaintTreesTool.instance.randomRotation = EditorGUILayout.Toggle(styles.treeRotation, PaintTreesTool.instance.randomRotation);
@@ -1198,10 +1204,19 @@ namespace UnityEditor
             if (!randomRotationEnabled)
                 EditorGUILayout.HelpBox(styles.treeRotationDisabled.text, MessageType.Info);
 
+            if (prefab != null)
+            {
+                MeshRenderer[] meshRenderers = prefab.GetComponentsInChildren<MeshRenderer>();
+                if (meshRenderers != null && meshRenderers.Length > 0)
+                {
+                    if (meshRenderers.Length > 1 || !prefab.GetComponent<MeshRenderer>())
+                        EditorGUILayout.HelpBox(styles.treeHasChildRenderers.text, MessageType.Warning);
+                }
+            }
+
             // TODO: we should check if the shaders assigned to this 'tree' support _TreeInstanceColor or not..  complicated check though
             PaintTreesTool.instance.treeColorAdjustment = EditorGUILayout.Slider(styles.treeColorVar, PaintTreesTool.instance.treeColorAdjustment, 0, 1);
 
-            GameObject prefab = m_Terrain.terrainData.treePrototypes[PaintTreesTool.instance.selectedTree].m_Prefab;
             if (prefab != null)
             {
                 StaticEditorFlags staticEditorFlags = GameObjectUtility.GetStaticEditorFlags(prefab);
@@ -1228,6 +1243,23 @@ namespace UnityEditor
         public void ShowDetails()
         {
             LoadDetailIcons();
+
+            RenderPipelineAsset renderPipelineAsset = GraphicsSettings.currentRenderPipeline;
+            if (renderPipelineAsset != null)
+            {
+                if (SupportedRenderingFeatures.active.terrainDetailUnsupported)
+                {
+                    EditorGUILayout.HelpBox(styles.detailShadersUnsupported.text, MessageType.Error);
+                }
+                else if (
+                    (renderPipelineAsset.terrainDetailLitShader == null) ||
+                    (renderPipelineAsset.terrainDetailGrassShader == null) ||
+                    (renderPipelineAsset.terrainDetailGrassBillboardShader == null))
+                {
+                    EditorGUILayout.HelpBox(styles.detailShadersMissing.text, MessageType.Error);
+                }
+            }
+
             ShowBrushes(0, true, true, false, false, 0);
 
             // Detail picker
@@ -2337,10 +2369,11 @@ namespace UnityEditor
             }
 
             int id = GUIUtility.GetControlID(s_TerrainEditorHash, FocusType.Passive);
+            var eventType = e.GetTypeForControl(id);
             if (!hitValidTerrain)
             {
                 // if we release the mouse button outside the terrain we still need to update the terrains. ( case 1089947 )
-                if (e.GetTypeForControl(id) == EventType.MouseUp)
+                if (eventType == EventType.MouseUp)
                     PaintContext.ApplyDelayedActions();
 
                 return;
@@ -2350,7 +2383,7 @@ namespace UnityEditor
 
             bool changeSelection = false;
 
-            switch (e.GetTypeForControl(id))
+            switch (eventType)
             {
                 case EventType.Layout:
                     if (!IsModificationToolActive())
@@ -2371,11 +2404,11 @@ namespace UnityEditor
                         return;
 
                     // Don't do anything on MouseDrag if we don't own the hotControl.
-                    if (e.GetTypeForControl(id) == EventType.MouseDrag && EditorGUIUtility.hotControl != id)
+                    if (eventType == EventType.MouseDrag && EditorGUIUtility.hotControl != id)
                         return;
 
                     // If user is ALT-dragging, we want to return to main routine
-                    if (Event.current.alt)
+                    if (e.alt)
                         return;
 
                     // Allow painting with LMB only
@@ -2385,6 +2418,7 @@ namespace UnityEditor
                     if (!IsModificationToolActive())
                         return;
 
+                    HandleUtility.AddDefaultControl(id);
                     if (HandleUtility.nearestControl != id)
                         return;
 

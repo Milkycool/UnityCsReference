@@ -4,7 +4,6 @@
 
 using System;
 using System.Linq;
-using System.Runtime.InteropServices;
 using UnityEditor.VisualStudioIntegration;
 using UnityEngine.Bindings;
 using Object = UnityEngine.Object;
@@ -27,7 +26,9 @@ namespace UnityEditor
     public enum SpritePackerMode
     {
         Disabled = 0,
+        [Obsolete("Sprite Packing Tags are deprecated. Please use Sprite Atlas asset.")]
         BuildTimeOnly = 1,
+        [Obsolete("Sprite Packing Tags are deprecated. Please use Sprite Atlas asset.")]
         AlwaysOn = 2,
         BuildTimeOnlyAtlas = 3,
         AlwaysOnAtlas = 4,
@@ -109,6 +110,9 @@ namespace UnityEditor
             set;
         }
 
+        [FreeFunction("GetEditorSettings")]
+        internal static extern EditorSettings GetEditorSettings();
+
         [StaticAccessor("GetEditorSettings()", StaticAccessorType.Dot)]
         public static extern SerializationMode serializationMode { get; set; }
 
@@ -170,6 +174,10 @@ namespace UnityEditor
         [StaticAccessor("GetEditorSettings()", StaticAccessorType.Dot)]
         public static extern bool cachingShaderPreprocessor { get; set; }
 
+        [StaticAccessor("GetEditorSettings()", StaticAccessorType.Dot)]
+        public static extern bool enableRoslynAnalysis { get; set; }
+
+
         public static string[] projectGenerationUserExtensions
         {
             get
@@ -213,6 +221,18 @@ namespace UnityEditor
 
         [StaticAccessor("GetEditorSettings()", StaticAccessorType.Dot)]
         public static extern bool useLegacyProbeSampleCount { get; set; }
+
+        [Obsolete("EditorSettings.disableCookiesInLightmapper is obsolete, please use EditorSettings.enableCookiesInLightmapper instead.", false)]
+        [StaticAccessor("GetEditorSettings()", StaticAccessorType.Dot)]
+        public static extern bool disableCookiesInLightmapper { get; set; }
+
+        public static bool enableCookiesInLightmapper
+        {
+#pragma warning disable 618
+            get { return !disableCookiesInLightmapper; }
+            set { disableCookiesInLightmapper = !value; }
+#pragma warning restore 618
+        }
 
         [StaticAccessor("GetEditorSettings()", StaticAccessorType.Dot)]
         public static extern bool enterPlayModeOptionsEnabled { get; set; }

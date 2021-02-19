@@ -130,7 +130,7 @@ namespace UnityEditor.Presets
             {
                 using (new EditorGUI.DisabledScope(targets.Length != 1 || !preset.GetPresetType().IsValidDefault()))
                 {
-                    var defaultList = Preset.GetDefaultPresetsForType(preset.GetPresetType()).Where(d => d.m_Preset == preset);
+                    var defaultList = Preset.GetDefaultPresetsForType(preset.GetPresetType()).Where(d => d.preset == preset);
                     if (defaultList.Any())
                     {
                         if (GUILayout.Button(GUIContent.Temp(string.Format(Style.removeFromDefault.text, preset.GetTargetTypeName()), Style.removeFromDefault.tooltip), EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
@@ -146,11 +146,7 @@ namespace UnityEditor.Presets
                         {
                             Undo.RecordObject(Resources.FindObjectsOfTypeAll<PresetManager>().First(), "Preset Manager");
                             var list = Preset.GetDefaultPresetsForType(preset.GetPresetType()).ToList();
-                            list.Insert(0, new DefaultPreset()
-                            {
-                                m_Filter = string.Empty,
-                                m_Preset = preset
-                            });
+                            list.Insert(0, new DefaultPreset(string.Empty, preset));
                             Preset.SetDefaultPresetsForType(preset.GetPresetType(), list.ToArray());
                             Undo.FlushUndoRecordObjects();
                         }
@@ -295,9 +291,17 @@ namespace UnityEditor.Presets
                 }
                 if (InternalEditorUtility.GetIsInspectorExpanded(m_InternalEditor.target) || m_InternalEditor.HasLargeHeader())
                 {
-                    EditorGUI.indentLevel++;
-                    m_InternalEditor.OnInspectorGUI();
-                    EditorGUI.indentLevel--;
+                    GUIStyle editorWrapper = (m_InternalEditor.UseDefaultMargins() && m_InternalEditor.CanBeExpandedViaAFoldoutWithoutUpdate()
+                        ? EditorStyles.inspectorDefaultMargins
+                        : GUIStyle.none);
+
+                    using (new InspectorWindowUtils.LayoutGroupChecker())
+                    {
+                        using (new EditorGUILayout.VerticalScope(editorWrapper))
+                        {
+                            m_InternalEditor.OnInspectorGUI();
+                        }
+                    }
                 }
                 if (change.changed || m_InternalEditor.isInspectorDirty)
                 {
@@ -348,22 +352,7 @@ namespace UnityEditor.Presets
             var propertyPath = property.propertyPath;
             var state = GetPropertyState(propertyPath);
             if ((state & PropertyState.Excluded) == PropertyState.Excluded && Event.current.type == EventType.Repaint)
-            {
-                Color oldColor = GUI.backgroundColor;
-                bool oldEnabled = GUI.enabled;
-                GUI.enabled = true;
-
-                Rect highlightRect = totalPosition;
-                highlightRect.xMin += EditorGUI.indent;
-
-                GUI.backgroundColor = new Color(240f / 255f, 81f / 255f, 60f / 255f);
-                highlightRect.x = 0;
-                highlightRect.width = 2;
-                EditorStyles.overrideMargin.Draw(highlightRect, false, false, false, false);
-
-                GUI.enabled = oldEnabled;
-                GUI.backgroundColor = oldColor;
-            }
+                EditorGUI.DrawMarginLineForRect(totalPosition, new Color(240f / 255f, 81f / 255f, 60f / 255f));
 
             GUI.enabled &= (state & PropertyState.Included) == PropertyState.Included;
         }

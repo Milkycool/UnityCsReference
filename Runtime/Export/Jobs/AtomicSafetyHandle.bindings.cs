@@ -3,6 +3,7 @@
 // https://unity3d.com/legal/licenses/Unity_Reference_Only_License
 
 using System;
+using System.Text;
 using System.Diagnostics;
 using UnityEngine.Bindings;
 using UnityEngine.Scripting;
@@ -15,6 +16,13 @@ namespace Unity.Collections.LowLevel.Unsafe
         AllJobsAlreadySynced = 0,
         DidSyncRunningJobs = 1,
         HandleWasAlreadyDeallocated = 2,
+    }
+
+    public enum AtomicSafetyErrorType
+    {
+        Deallocated = 0,         // access on main thread after deallocation
+        DeallocatedFromJob = 1,  // access from job after deallocation
+        NotAllocatedFromJob = 2, // Access from job prior to assignment
     }
 
     // AtomicSafetyHandle is used by the C# job system to provide validation and full safety
@@ -33,14 +41,15 @@ namespace Unity.Collections.LowLevel.Unsafe
         internal const int Write = 1 << 1;
         internal const int Dispose = 1 << 2;
 
-        internal const int ReadCheck                = ~(Write | Dispose);
-        internal const int WriteCheck               = ~(Read | Dispose);
-        internal const int DisposeCheck             = ~(Read | Write);
-        internal const int ReadWriteDisposeCheck    = ~(Read | Write | Dispose);
+        internal const int ReadCheck = ~(Write | Dispose);
+        internal const int WriteCheck = ~(Read | Dispose);
+        internal const int DisposeCheck = ~(Read | Write);
+        internal const int ReadWriteDisposeCheck = ~(Read | Write | Dispose);
 
         [NativeDisableUnsafePtrRestriction]
         internal IntPtr versionNode;
-        internal int  version;
+        internal int version;
+        internal int staticSafetyId;
 
         // Creates a new AtomicSafetyHandle that is valid until Release is called.
         [ThreadSafe]
@@ -84,7 +93,7 @@ namespace Unity.Collections.LowLevel.Unsafe
         // Performs CheckWriteAndThrow and then bumps the secondary version.
         // This allows for example a NativeArray that becomes invalid if the Length of a List
         // is changed to be invalidated, while the NativeList handle itself remains valid.
-        [ThreadSafe]
+        [ThreadSafe(ThrowsException = true)]
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         public static extern void CheckWriteAndBumpSecondaryVersion(AtomicSafetyHandle handle);
 
@@ -111,22 +120,22 @@ namespace Unity.Collections.LowLevel.Unsafe
         public static extern EnforceJobResult EnforceAllBufferJobsHaveCompletedAndDisableReadWrite(AtomicSafetyHandle handle);
 
         // Same as CheckReadAndThrow but the early out has already been performed in the call site for performance reasons.
-        [ThreadSafe]
+        [ThreadSafe(ThrowsException = true)]
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         internal static extern void CheckReadAndThrowNoEarlyOut(AtomicSafetyHandle handle);
 
         // Same as CheckWriteAndThrow but the early out has already been performed in the call site for performance reasons.
-        [ThreadSafe]
+        [ThreadSafe(ThrowsException = true)]
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         internal static extern void CheckWriteAndThrowNoEarlyOut(AtomicSafetyHandle handle);
 
         // Checks if the handle can be deallocated.
         // If not (already destroyed, job currently accessing the data) throws an exception.
-        [ThreadSafe]
+        [ThreadSafe(ThrowsException = true)]
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         public static extern void CheckDeallocateAndThrow(AtomicSafetyHandle handle);
 
-        [ThreadSafe]
+        [ThreadSafe(ThrowsException = true)]
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         public static extern void CheckGetSecondaryDataPointerAndThrow(AtomicSafetyHandle handle);
 
@@ -171,6 +180,28 @@ namespace Unity.Collections.LowLevel.Unsafe
 
         [ThreadSafe]
         public static extern string GetWriterName(AtomicSafetyHandle handle);
+
+        [ThreadSafe]
+        public static unsafe extern int NewStaticSafetyId(byte* ownerTypeNameBytes, int byteCount);
+
+        public static unsafe int NewStaticSafetyId<T>()
+        {
+            var ownerTypeName = typeof(T).ToString();
+            var bytes = Encoding.UTF8.GetBytes(ownerTypeName);
+            fixed(byte* pBytes = bytes)
+            {
+                return NewStaticSafetyId(pBytes, bytes.Length);
+            }
+        }
+
+        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+        [NativeThrows, ThreadSafe]
+        public static unsafe extern void SetCustomErrorMessage(int staticSafetyId, AtomicSafetyErrorType errorType, byte* messageBytes, int byteCount);
+        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+        public static unsafe void SetStaticSafetyId(ref AtomicSafetyHandle handle, int staticSafetyId)
+        {
+            handle.staticSafetyId = staticSafetyId;
+        }
     }
 }
 

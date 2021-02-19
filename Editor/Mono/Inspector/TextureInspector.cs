@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEditor;
 using UnityEngine.Rendering;
 using UnityEngine.Experimental.Rendering;
+using VirtualTexturing = UnityEngine.Rendering.VirtualTexturing;
 
 namespace UnityEditor
 {
@@ -114,7 +115,7 @@ namespace UnityEditor
         }
         static Styles s_Styles;
 
-        enum PreviewMode
+        internal enum PreviewMode
         {
             RGB,
             R,
@@ -123,7 +124,7 @@ namespace UnityEditor
             A,
         }
 
-        private PreviewMode m_PreviewMode = PreviewMode.RGB;
+        internal PreviewMode m_PreviewMode = PreviewMode.RGB;
         public bool showAlpha
         {
             get { return m_PreviewMode == PreviewMode.A; }
@@ -142,6 +143,11 @@ namespace UnityEditor
         [SerializeField]
         float m_MipLevel = 0;
 
+        [SerializeField]
+        protected float m_ExposureSliderValue = 0.0f;
+
+        protected float m_ExposureSliderMax = 16f; // this value can be altered by the user
+
         CubemapPreview m_CubemapPreview = new CubemapPreview();
 
         List<TextureMipLevels> m_TextureMipLevels = new List<TextureMipLevels>();
@@ -149,7 +155,7 @@ namespace UnityEditor
         public static bool IsNormalMap(Texture t)
         {
             TextureUsageMode mode = TextureUtil.GetUsageMode(t);
-            return mode == TextureUsageMode.NormalmapPlain || mode == TextureUsageMode.NormalmapDXT5nm;
+            return TextureUtil.IsNormalMapUsageMode(mode);
         }
 
         protected virtual void OnEnable()
@@ -161,6 +167,32 @@ namespace UnityEditor
             m_Aniso = serializedObject.FindProperty("m_TextureSettings.m_Aniso");
 
             RecordTextureMipLevels();
+
+            SetMipLevelDefaultForVT();
+        }
+
+        //VT textures can be very large and aren't in GPU memory yet. To avoid unnecessary streaming and cache use, we limit the default shown mip resolution.
+        private void SetMipLevelDefaultForVT()
+        {
+            foreach (var t in targets)
+            {
+                var tex = t as Texture;
+                if (EditorGUI.UseVTMaterial(tex))
+                {
+                    int mips = TextureUtil.GetMipmapCount(tex);
+                    const int numMipsFor1K = 11;
+
+                    if (mips > numMipsFor1K)
+                    {
+                        mipLevel = Mathf.Max(mipLevel, mips - numMipsFor1K); //set to 1024x1024 or less
+                    }
+                }
+            }
+        }
+
+        public override void ReloadPreviewInstances()
+        {
+            SetMipLevelDefaultForVT();
         }
 
         private void RecordTextureMipLevels()
@@ -197,6 +229,10 @@ namespace UnityEditor
 
         public override bool RequiresConstantRepaint()
         {
+            //Keep repainting if the texture is rendered with a virtual texturing material because we don't know when all texture tiles will be streamed in
+            if (hasTargetUsingVTMaterial)
+                return true;
+
             foreach (TextureMipLevels textureInfo in m_TextureMipLevels)
             {
                 if (textureInfo.texture == null)
@@ -253,9 +289,16 @@ namespace UnityEditor
             serializedObject.Update();
             EditorGUI.BeginChangeCheck();
 
-            DoWrapModePopup();
-            DoFilterModePopup();
-            DoAnisoLevelSlider();
+            if (IsCubemapArray())
+            {
+                DoFilterModePopup();
+            }
+            else
+            {
+                DoWrapModePopup();
+                DoFilterModePopup();
+                DoAnisoLevelSlider();
+            }
 
             if (EditorGUI.EndChangeCheck())
                 ApplySettingsToTextures();
@@ -473,6 +516,12 @@ namespace UnityEditor
             return t != null && t.dimension == UnityEngine.Rendering.TextureDimension.Cube;
         }
 
+        bool IsCubemapArray()
+        {
+            var t = target as Texture;
+            return t != null && t.dimension == UnityEngine.Rendering.TextureDimension.CubeArray;
+        }
+
         bool IsVolume()
         {
             var t = target as Texture;
@@ -483,6 +532,13 @@ namespace UnityEditor
         {
             var t = target as Texture2DArray;
             return t != null && t.dimension == UnityEngine.Rendering.TextureDimension.Tex2DArray;
+        }
+
+        protected float GetExposureValueForTexture(Texture t)
+        {
+            if (TextureUtil.NeedsExposureControl(t))
+                return m_ExposureSliderValue;
+            return 0.0f;
         }
 
         public override void OnPreviewSettings()
@@ -505,8 +561,10 @@ namespace UnityEditor
             // and while it's being shown the actual texture object might disappear --
             // make sure to handle null targets.
             Texture tex = target as Texture;
+
             bool alphaOnly = false;
             bool hasAlpha = true;
+            bool needsExposureControl = false;
             int mipCount = 1;
 
             if (target is Texture2D)
@@ -519,29 +577,27 @@ namespace UnityEditor
             {
                 if (t == null) // texture might have disappeared while we're showing this in a preview popup
                     continue;
-                TextureFormat format = 0;
-                bool checkFormat = false;
+
+                mipCount = Mathf.Max(mipCount, TextureUtil.GetMipmapCount(t));
+
                 if (t is Texture2D)
                 {
-                    format = (t as Texture2D).format;
-                    checkFormat = true;
-                }
+                    TextureFormat format = (t as Texture2D).format;
+                    TextureUsageMode mode = TextureUtil.GetUsageMode(t);
 
-                if (checkFormat)
-                {
                     if (!TextureUtil.IsAlphaOnlyTextureFormat(format))
                         alphaOnly = false;
+
                     if (TextureUtil.HasAlphaTextureFormat(format))
                     {
-                        TextureUsageMode mode = TextureUtil.GetUsageMode(t);
                         if (mode == TextureUsageMode.Default) // all other texture usage modes don't displayable alpha
                             hasAlpha = true;
                     }
+
+                    if (TextureUtil.NeedsExposureControl(t))
+                        needsExposureControl = true;
                 }
-
-                mipCount = Mathf.Max(mipCount, TextureUtil.GetMipmapCount(t));
             }
-
 
             List<PreviewMode> previewCandidates = new List<PreviewMode>(5);
             previewCandidates.Add(PreviewMode.RGB);
@@ -560,7 +616,6 @@ namespace UnityEditor
             {
                 previewCandidates.Remove(PreviewMode.A);
             }
-
 
             if (previewCandidates.Count > 1 && tex != null && !IsNormalMap(tex))
             {
@@ -590,11 +645,24 @@ namespace UnityEditor
                         : m_PreviewMode;
             }
 
+            if (needsExposureControl)
+            {
+                m_ExposureSliderValue = EditorGUIInternal.ExposureSlider(m_ExposureSliderValue, ref m_ExposureSliderMax, s_Styles.previewSlider);
+            }
+
             if (mipCount > 1)
             {
                 GUILayout.Box(s_Styles.smallZoom, s_Styles.previewLabel);
                 GUI.changed = false;
                 m_MipLevel = Mathf.Round(GUILayout.HorizontalSlider(m_MipLevel, mipCount - 1, 0, s_Styles.previewSlider, s_Styles.previewSliderThumb, GUILayout.MaxWidth(64)));
+
+                //For now, we don't have mipmaps smaller than the tile size when using VT.
+                if (EditorGUI.UseVTMaterial(tex))
+                {
+                    int numMipsOfTile = (int)Mathf.Log(VirtualTexturing.EditorHelpers.tileSize, 2) + 1;
+                    m_MipLevel = Mathf.Min(m_MipLevel, Mathf.Max(mipCount - numMipsOfTile, 0));
+                }
+
                 GUILayout.Box(s_Styles.largeZoom, s_Styles.previewLabel);
             }
         }
@@ -603,6 +671,19 @@ namespace UnityEditor
         {
             return (target != null);
         }
+
+        internal bool hasTargetUsingVTMaterial
+        {
+            get
+            {
+                foreach (var t in targets)
+                    if (EditorGUI.UseVTMaterial(t as Texture))
+                        return true;
+
+                return false;
+            }
+        }
+
 
         public override void OnPreviewGUI(Rect r, GUIStyle background)
         {
@@ -663,9 +744,9 @@ namespace UnityEditor
             else
             {
                 if (t2d != null && t2d.alphaIsTransparency)
-                    EditorGUI.DrawTextureTransparent(wantedRect, t, ScaleMode.StretchToFill, 0, mipLevel, colorWriteMask);
+                    EditorGUI.DrawTextureTransparent(wantedRect, t, ScaleMode.StretchToFill, 0, mipLevel, colorWriteMask, GetExposureValueForTexture(t));
                 else
-                    EditorGUI.DrawPreviewTexture(wantedRect, t, null, ScaleMode.StretchToFill, 0, mipLevel, colorWriteMask);
+                    EditorGUI.DrawPreviewTexture(wantedRect, t, null, ScaleMode.StretchToFill, 0, mipLevel, colorWriteMask, GetExposureValueForTexture(t));
             }
 
             // TODO: Less hacky way to prevent sprite rects to not appear in smaller previews like icons.
@@ -762,7 +843,7 @@ namespace UnityEditor
                 width, height,
                 0,
                 SystemInfo.GetGraphicsFormat(DefaultFormat.LDR));
-            Material mat = EditorGUI.GetMaterialForSpecialTexture(texture, null, QualitySettings.activeColorSpace == ColorSpace.Linear);
+            Material mat = EditorGUI.GetMaterialForSpecialTexture(texture, null, QualitySettings.activeColorSpace == ColorSpace.Linear, false);
             if (mat != null)
                 Graphics.Blit(texture, tmp, mat);
             else Graphics.Blit(texture, tmp);
@@ -851,26 +932,47 @@ namespace UnityEditor
             if (showSize)
                 info += "\n" + EditorUtility.FormatBytes(TextureUtil.GetStorageMemorySizeLong(t));
 
-            if (TextureUtil.GetUsageMode(t) == TextureUsageMode.AlwaysPadded)
+            TextureUsageMode mode = TextureUtil.GetUsageMode(t);
+
+            if (mode == TextureUsageMode.AlwaysPadded)
             {
                 var glWidth = TextureUtil.GetGPUWidth(t);
                 var glHeight = TextureUtil.GetGPUHeight(t);
                 if (t.width != glWidth || t.height != glHeight)
                     info += UnityString.Format("\nPadded to {0}x{1}", glWidth, glHeight);
             }
-            else if (TextureUtil.GetUsageMode(t) == TextureUsageMode.BakedLightmapRGBM ||
-                     TextureUtil.GetUsageMode(t) == TextureUsageMode.RealtimeLightmapRGBM ||
-                     TextureUtil.GetUsageMode(t) == TextureUsageMode.RGBMEncoded)
+            else if (TextureUtil.IsRGBMUsageMode(mode))
             {
                 info += "\nRGBM encoded";
             }
-            else if (TextureUtil.GetUsageMode(t) == TextureUsageMode.DoubleLDR ||
-                     TextureUtil.GetUsageMode(t) == TextureUsageMode.BakedLightmapDoubleLDR)
+            else if (TextureUtil.IsDoubleLDRUsageMode(mode))
             {
                 info += "\ndLDR encoded";
             }
 
             return info;
+        }
+
+        internal static float PreviewSettingsSlider(GUIContent content, float value, float min, float max, float sliderWidth, float floatFieldWidth, bool isInteger)
+        {
+            var labelWidth = EditorStyles.label.CalcSize(content).x + 2;
+            var controlRect = EditorGUILayout.GetControlRect(GUILayout.Width(labelWidth + sliderWidth + floatFieldWidth));
+            var controlId = GUIUtility.GetControlID(FocusType.Keyboard);
+
+            var labelRect = new Rect(controlRect.position, new Vector2(labelWidth, controlRect.height));
+            controlRect.x += labelRect.width;
+            controlRect.width -= labelRect.width + 2;
+            GUI.Label(labelRect, content);
+
+            var sliderRect = new Rect(controlRect.position, new Vector2(sliderWidth, controlRect.height));
+            controlRect.x += sliderRect.width + 2;
+            controlRect.width -= sliderRect.width;
+            value = GUI.Slider(sliderRect, value, 0, min, max, GUI.skin.horizontalSlider, GUI.skin.horizontalSliderThumb, true, 0);
+            if (isInteger)
+                value = Mathf.Round(EditorGUI.DoIntField(EditorGUI.s_RecycledEditor, controlRect, labelRect, controlId, Mathf.RoundToInt(value), EditorGUI.kIntFieldFormatString, EditorStyles.numberField, false, 0));
+            else
+                value = EditorGUI.DoFloatField(EditorGUI.s_RecycledEditor, controlRect, labelRect, controlId, value, EditorGUI.kFloatFieldFormatString, EditorStyles.numberField, true);
+            return Mathf.Clamp(value, min, max);
         }
     }
 }
@@ -979,7 +1081,6 @@ class PreviewGUI
                 if (GUIUtility.hotControl == id)
                 {
                     scrollPosition -= evt.delta * (evt.shift ? 3 : 1) / Mathf.Min(position.width, position.height) * 140.0f;
-                    scrollPosition.y = Mathf.Clamp(scrollPosition.y, -90, 90);
                     evt.Use();
                     GUI.changed = true;
                 }
